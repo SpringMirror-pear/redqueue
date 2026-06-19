@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling==1.30.1"]
+build-backend = "hatchling.build"
+
+[project]
+name = "redqueue"
+version = "0.10.0"
+description = "Redis-backed Python message queue library with List, Streams, delayed tasks, and monitoring."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [
+  { name = "SpringMirror-pear" }
+]
+maintainers = [
+  { name = "SpringMirror-pear" }
+]
+keywords = ["redis", "queue", "message-queue", "streams", "delayed-jobs"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+  "redis==6.4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/SpringMirror-pear/redqueue"
+Repository = "https://github.com/SpringMirror-pear/redqueue.git"
+Issues = "https://github.com/SpringMirror-pear/redqueue/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1; python_version >= '3.10'",
+  "pytest-asyncio==1.4.0; python_version >= '3.10'",
+  "ruff==0.15.18",
+  "mypy==2.1.0; python_version >= '3.10'",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redqueue"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: tests that require external services such as Redis",
+  "contract: backend behavior contract tests",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/redqueue"]
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

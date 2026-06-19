@@ -1,0 +1,394 @@
+# SPDX-License-Identifier: Apache-2.0
+# Author: SpringMirror-pear
+
+"""Asynchronous Redis Streams backend."""
+
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from redqueue.backends.base import BaseMessageBackend
+from redqueue.compat import RedisCapabilities, RedisVersion
+from redqueue.config import QueueConfig
+from redqueue.exceptions import AckError, BackendUnavailableError, RetryExceededError
+from redqueue.message import Message, new_message_id
+from redqueue.monitoring import MonitoringEventType
+
+
+class AsyncStreamRedis(Protocol):
+    """Redis command subset required by the asynchronous Streams backend."""
+
+    async def xadd(
+        self,
+        name: str,
+        fields: dict[str, bytes | str],
+        id: str = "*",
+    ) -> str: ...
+
+    async def xgroup_create(
+        self,
+        name: str,
+        groupname: str,
+        id: str = "0",
+        mkstream: bool = True,
+    ) -> bool: ...
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
+        streams: dict[str, str],
+        count: int | None = None,
+        block: int | None = None,
+    ) -> list[Any]: ...
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> int: ...
+
+    async def xautoclaim(
+        self,
+        name: str,
+        groupname: str,
+        consumername: str,
+        min_idle_time: int,
+        start_id: str,
+        count: int | None = None,
+    ) -> Any: ...
+
+    async def xpending_range(
+        self,
+        name: str,
+        groupname: str,
+        min: str,
+        max: str,
+        count: int,
+    ) -> list[Any]: ...
+
+    async def xclaim(
+        self,
+        name: str,
+        groupname: str,
+        consumername: str,
+        min_idle_time: int,
+        message_ids: list[str],
+    ) -> list[Any]: ...
+
+
+class AsyncStreamBackend(BaseMessageBackend):
+    """Reliable async queue backend implemented with Redis Streams."""
+
+    backend_name = "stream"
+
+    def __init__(
+        self,
+        redis: AsyncStreamRedis,
+        config: QueueConfig,
+        capabilities: RedisCapabilities,
+    ) -> None:
+        capabilities.require_streams()
+        super().__init__(config)
+        self.redis = redis
+        self.capabilities = capabilities
+
+    @classmethod
+    async def create(
+        cls,
+        redis: AsyncStreamRedis,
+        config: QueueConfig,
+        capabilities: RedisCapabilities,
+    ) -> AsyncStreamBackend:
+        backend = cls(redis, config, capabilities)
+        await backend.ensure_group()
+        return backend
+
+    @classmethod
+    async def for_modern_redis(
+        cls,
+        redis: AsyncStreamRedis,
+        config: QueueConfig,
+    ) -> AsyncStreamBackend:
+        return await cls.create(redis, config, RedisCapabilities(RedisVersion(7, 0, 0)))
+
+    @property
+    def stream_key(self) -> str:
+        return self.config.key("stream")
+
+    @property
+    def dead_key(self) -> str:
+        return self.config.key("dead")
+
+    async def publish(
+        self,
+        payload: Any,
+        *,
+        headers: dict[str, Any] | None = None,
+        message_id: str | None = None,
+    ) -> str:
+        message = Message(
+            id=message_id or new_message_id(),
+            queue=self.config.queue,
+            payload=payload,
+            headers=headers or {},
+            backend=self.backend_name,
+        )
+        await self._publish_message(message)
+        return message.id
+
+    async def consume(
+        self,
+        *,
+        timeout: float | None = None,
+        batch_size: int = 1,
+    ) -> Message | list[Message] | None:
+        block = int(timeout * 1000) if timeout is not None else None
+        response = await self._execute(
+            "redis.xreadgroup",
+            self.redis.xreadgroup,
+            self.config.consumer_group,
+            self._consumer_name(),
+            {self.stream_key: ">"},
+            batch_size,
+            block,
+        )
+        messages = self._parse_read_response(response)
+        if batch_size <= 1:
+            if not messages:
+                return None
+            self._emit(MonitoringEventType.MESSAGE_CONSUMED, messages[0])
+            return messages[0]
+        for message in messages:
+            self._emit(MonitoringEventType.MESSAGE_CONSUMED, message)
+        return messages
+
+    async def ack(self, message: Message) -> None:
+        if not message.raw_id:
+            raise AckError(
+                "stream message is missing raw Redis stream id",
+                action="message.ack",
+                queue=self.config.queue,
+                details={"message_id": message.id},
+            )
+        removed = await self._execute(
+            "redis.xack",
+            self.redis.xack,
+            self.stream_key,
+            self.config.consumer_group,
+            message.raw_id,
+        )
+        if removed < 1:
+            raise AckError(
+                "stream message was not acknowledged",
+                action="message.ack",
+                queue=self.config.queue,
+                details={"message_id": message.id, "raw_id": message.raw_id},
+            )
+        self._emit(MonitoringEventType.MESSAGE_ACKED, message)
+
+    async def nack(self, message: Message, *, requeue: bool = True) -> None:
+        if requeue:
+            await self.publish(
+                message.payload,
+                headers=message.headers,
+                message_id=message.id,
+            )
+            await self.ack(message)
+        else:
+            await self._move_to_dead(message)
+        self._emit(
+            MonitoringEventType.MESSAGE_NACKED,
+            message,
+            attributes={"requeue": requeue},
+        )
+
+    async def retry(
+        self,
+        message: Message,
+        *,
+        delay: float | None = None,
+        reason: str | None = None,
+    ) -> None:
+        if message.attempts >= self.config.retry.max_retries:
+            await self._move_to_dead(message)
+            self._emit(
+                MonitoringEventType.MESSAGE_DEAD_LETTERED,
+                message,
+                attributes={"reason": reason, "attempts": message.attempts},
+            )
+            raise RetryExceededError(
+                "stream message exceeded max retries and was moved to dead letter",
+                action="message.retry",
+                queue=self.config.queue,
+                details={
+                    "message_id": message.id,
+                    "attempts": message.attempts,
+                    "max_retries": self.config.retry.max_retries,
+                },
+            )
+        retried = message.with_attempt()
+        await self._publish_message(retried)
+        await self.ack(message)
+        self._emit(
+            MonitoringEventType.MESSAGE_RETRIED,
+            retried,
+            attributes={"delay": delay, "reason": reason},
+        )
+
+    async def recover_pending(
+        self,
+        *,
+        min_idle_ms: int,
+        limit: int = 100,
+    ) -> list[Message]:
+        if not self.capabilities.supports_streams_auto_claim:
+            pending = await self._execute(
+                "redis.xpending_range",
+                self.redis.xpending_range,
+                self.stream_key,
+                self.config.consumer_group,
+                "-",
+                "+",
+                limit,
+            )
+            message_ids = [self._pending_id(item) for item in pending]
+            if not message_ids:
+                return []
+            claimed = await self._execute(
+                "redis.xclaim",
+                self.redis.xclaim,
+                self.stream_key,
+                self.config.consumer_group,
+                self._consumer_name(),
+                min_idle_ms,
+                message_ids,
+            )
+            return [
+                self._decode_stream_entry(str(raw_id), fields)
+                for raw_id, fields in claimed
+            ]
+        response = await self._execute(
+            "redis.xautoclaim",
+            self.redis.xautoclaim,
+            self.stream_key,
+            self.config.consumer_group,
+            self._consumer_name(),
+            min_idle_ms,
+            "0-0",
+            limit,
+        )
+        return self._parse_autoclaim_response(response)
+
+    async def dead_letters(self, *, limit: int = 100) -> list[Message]:
+        response = await self._execute(
+            "redis.xreadgroup",
+            self.redis.xreadgroup,
+            self.config.consumer_group,
+            self._consumer_name(),
+            {self.dead_key: ">"},
+            limit,
+            None,
+        )
+        return self._parse_read_response(response)
+
+    async def requeue_dead(self, message: Message) -> None:
+        await self.publish(
+            message.payload,
+            headers=message.headers,
+            message_id=message.id,
+        )
+        if message.raw_id:
+            await self._execute(
+                "redis.xack",
+                self.redis.xack,
+                self.dead_key,
+                self.config.consumer_group,
+                message.raw_id,
+            )
+
+    async def _publish_message(self, message: Message) -> str:
+        raw_id = await self._execute(
+            "redis.xadd",
+            self.redis.xadd,
+            self.stream_key,
+            {"payload": self._encode(message)},
+        )
+        published = message.with_backend(self.backend_name, raw_id=str(raw_id))
+        self._emit(
+            MonitoringEventType.MESSAGE_PUBLISHED,
+            published,
+            attributes={"key": self.stream_key},
+        )
+        return str(raw_id)
+
+    async def ensure_group(self) -> None:
+        try:
+            await self.redis.xgroup_create(
+                self.stream_key,
+                self.config.consumer_group,
+                id="0",
+                mkstream=True,
+            )
+        except Exception as exc:
+            if "BUSYGROUP" in str(exc):
+                return
+            self._emit_backend_error("redis.xgroup_create", str(exc))
+            raise BackendUnavailableError(
+                "Redis Streams group initialization failed",
+                action="redis.xgroup_create",
+                queue=self.config.queue,
+            ) from exc
+
+    async def _move_to_dead(self, message: Message) -> None:
+        await self._execute(
+            "redis.xadd",
+            self.redis.xadd,
+            self.dead_key,
+            {"payload": self._encode(message)},
+        )
+        await self.ack(message)
+
+    def _parse_read_response(self, response: list[Any]) -> list[Message]:
+        messages: list[Message] = []
+        for _stream, entries in response or []:
+            for raw_id, fields in entries:
+                messages.append(self._decode_stream_entry(str(raw_id), fields))
+        return messages
+
+    def _parse_autoclaim_response(self, response: Any) -> list[Message]:
+        if not response:
+            return []
+        entries = response[1] if len(response) > 1 else []
+        return [
+            self._decode_stream_entry(str(raw_id), fields)
+            for raw_id, fields in entries
+        ]
+
+    def _decode_stream_entry(self, raw_id: str, fields: dict[Any, Any]) -> Message:
+        payload = fields.get("payload") or fields.get(b"payload")
+        if payload is None:
+            raise BackendUnavailableError(
+                "stream entry is missing payload field",
+                action="message.decode",
+                queue=self.config.queue,
+                details={"raw_id": raw_id},
+            )
+        return self._decode(payload).with_backend(self.backend_name, raw_id=raw_id)
+
+    def _consumer_name(self) -> str:
+        return self.config.consumer_name or "redqueue-consumer"
+
+    @staticmethod
+    def _pending_id(item: Any) -> str:
+        if isinstance(item, dict):
+            value = item.get("message_id") or item.get("message-id") or item.get("id")
+            return str(value)
+        return str(item[0])
+
+    async def _execute(self, action: str, func: Any, *args: Any) -> Any:
+        try:
+            return await func(*args)
+        except Exception as exc:
+            self._emit_backend_error(action, str(exc))
+            raise BackendUnavailableError(
+                "Redis async Streams backend command failed",
+                action=action,
+                queue=self.config.queue,
+            ) from exc
