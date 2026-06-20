@@ -15,14 +15,29 @@ from redqueue.serialization import JsonSerializer, Serializer
 
 
 class BackendType(str, Enum):
-    """Supported Redis queue backends."""
+    """Supported Redis queue backends.
+
+    Attributes:
+        LIST: Reliable Redis List backend.
+        STREAM: Redis Streams backend with consumer groups.
+    """
 
     LIST = "list"
     STREAM = "stream"
 
     @classmethod
     def coerce(cls, value: str | BackendType) -> BackendType:
-        """Convert user input into a backend enum with RedQueue errors."""
+        """Convert user input into a backend enum.
+
+        Args:
+            value: String backend name or ``BackendType`` instance.
+
+        Returns:
+            Normalized backend enum.
+
+        Raises:
+            QueueConfigError: If ``value`` does not match a supported backend.
+        """
 
         if isinstance(value, cls):
             return value
@@ -37,13 +52,26 @@ class BackendType(str, Enum):
 
 @dataclass(frozen=True)
 class RetryConfig:
-    """Retry behavior for failed messages."""
+    """Retry behavior for failed messages.
+
+    Attributes:
+        max_retries: Maximum number of retry attempts before dead-lettering.
+        base_delay_seconds: Linear delay factor used by ``next_delay``.
+        max_delay_seconds: Optional upper bound for computed retry delay.
+    """
 
     max_retries: int = 3
     base_delay_seconds: float = 0.0
     max_delay_seconds: float | None = None
 
     def __post_init__(self) -> None:
+        """Validate retry limits after dataclass initialization.
+
+        Raises:
+            QueueConfigError: If retry counts or delay values are negative, or
+                if ``max_delay_seconds`` is less than ``base_delay_seconds``.
+        """
+
         if self.max_retries < 0:
             raise QueueConfigError("max_retries must be greater than or equal to 0")
         if self.base_delay_seconds < 0:
@@ -63,7 +91,17 @@ class RetryConfig:
             )
 
     def next_delay(self, attempts: int) -> float:
-        """Return the retry delay for an attempt count."""
+        """Return the retry delay for an attempt count.
+
+        Args:
+            attempts: Current attempt count.
+
+        Returns:
+            Delay in seconds, capped by ``max_delay_seconds`` when configured.
+
+        Raises:
+            QueueConfigError: If ``attempts`` is negative.
+        """
 
         if attempts < 0:
             raise QueueConfigError("attempts must be greater than or equal to 0")
@@ -75,7 +113,23 @@ class RetryConfig:
 
 @dataclass(frozen=True)
 class QueueConfig:
-    """Queue configuration shared by sync and async clients."""
+    """Queue configuration shared by sync and async clients.
+
+    Attributes:
+        queue: Logical queue name. Whitespace is trimmed and whitespace inside
+            the name is rejected.
+        backend: Backend type or backend name.
+        enable_delay: Reserved feature flag for delay support.
+        namespace: Redis key namespace prefix.
+        retry: Retry policy used by backend ``retry`` operations.
+        monitoring: Monitoring hook. Custom hooks are wrapped in
+            ``SafeMonitoringHook``.
+        serializer: Payload serializer used for message envelopes.
+        visibility_timeout_seconds: Default stale/pending recovery window.
+        consumer_group: Streams consumer group name.
+        consumer_name: Optional Streams consumer name.
+        metadata: User-defined configuration metadata.
+    """
 
     queue: str
     backend: BackendType | str = BackendType.LIST
@@ -92,6 +146,13 @@ class QueueConfig:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """Normalize and validate queue configuration.
+
+        Raises:
+            QueueConfigError: If names, retry config, serializer, monitoring
+                hook, or visibility timeout are invalid.
+        """
+
         queue = self._normalize_name(self.queue, field_name="queue")
         namespace = self._normalize_name(self.namespace, field_name="namespace")
         object.__setattr__(self, "queue", queue)
@@ -127,6 +188,20 @@ class QueueConfig:
 
     @staticmethod
     def _normalize_name(value: str, *, field_name: str) -> str:
+        """Validate and trim a Redis key name segment.
+
+        Args:
+            value: Raw name value.
+            field_name: Human-readable field name used in error messages.
+
+        Returns:
+            Trimmed name.
+
+        Raises:
+            QueueConfigError: If the value is not a non-empty string or contains
+                whitespace.
+        """
+
         if not isinstance(value, str):
             raise QueueConfigError(f"{field_name} must be a string")
         normalized = value.strip()
@@ -138,18 +213,36 @@ class QueueConfig:
 
     @property
     def backend_type(self) -> BackendType:
-        """Normalized backend type."""
+        """Normalized backend type.
+
+        Returns:
+            ``BackendType`` value derived from the ``backend`` field.
+        """
 
         return BackendType.coerce(self.backend)
 
     @property
     def key_prefix(self) -> str:
-        """Redis key prefix for this queue."""
+        """Redis key prefix for this queue.
+
+        Returns:
+            Hash-tagged Redis key prefix, for example ``rq:{emails}``.
+        """
 
         return f"{self.namespace}:{{{self.queue}}}"
 
     def key(self, suffix: str) -> str:
-        """Build a namespaced Redis key for a queue-owned data structure."""
+        """Build a namespaced Redis key for a queue-owned data structure.
+
+        Args:
+            suffix: Key suffix such as ``ready``, ``processing``, or ``dead``.
+
+        Returns:
+            Fully namespaced Redis key.
+
+        Raises:
+            QueueConfigError: If ``suffix`` is invalid.
+        """
 
         suffix = self._normalize_name(suffix, field_name="suffix")
         return f"{self.key_prefix}:{suffix}"

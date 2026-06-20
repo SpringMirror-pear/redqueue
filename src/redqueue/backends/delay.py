@@ -38,7 +38,17 @@ class SyncDelayRedis(Protocol):
 
 
 class DelayBackend:
-    """Delayed task scheduler implemented with Redis Sorted Set."""
+    """Delayed task scheduler implemented with Redis Sorted Set.
+
+    Delayed messages are stored as payload keys plus a Sorted Set entry whose
+    score is the Unix timestamp when the message becomes due. ``schedule_due``
+    atomically claims due ids with ``ZREM`` before publishing them.
+
+    Attributes:
+        redis: Redis client implementing delayed task commands.
+        config: Queue configuration.
+        publisher: Backend that receives due messages.
+    """
 
     backend_name = "delay"
 
@@ -48,15 +58,34 @@ class DelayBackend:
         config: QueueConfig,
         publisher: Any,
     ) -> None:
+        """Initialize the delay scheduler.
+
+        Args:
+            redis: Redis client implementing ``SyncDelayRedis``.
+            config: Queue configuration.
+            publisher: Backend exposing ``publish`` for released messages.
+        """
+
         self.redis = redis
         self.config = config
         self.publisher = publisher
 
     @property
     def delayed_key(self) -> str:
+        """Redis Sorted Set key containing delayed message ids."""
+
         return self.config.key("delayed")
 
     def payload_key(self, message_id: str) -> str:
+        """Return the Redis key that stores a delayed message envelope.
+
+        Args:
+            message_id: RedQueue message id.
+
+        Returns:
+            Namespaced Redis string key.
+        """
+
         return self.config.key(f"payload:{message_id}")
 
     def delay(
@@ -68,6 +97,23 @@ class DelayBackend:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> str:
+        """Schedule a payload for future release.
+
+        Args:
+            payload: Application payload.
+            delay_seconds: Relative delay in seconds.
+            run_at: Absolute Unix timestamp when the message is due.
+            headers: Optional message metadata.
+            message_id: Optional stable message id.
+
+        Returns:
+            Scheduled message id.
+
+        Raises:
+            QueueConfigError: If delay values are invalid.
+            BackendUnavailableError: If Redis commands fail.
+        """
+
         available_at = self._available_at(delay_seconds=delay_seconds, run_at=run_at)
         message = Message(
             id=message_id or new_message_id(),
@@ -94,6 +140,20 @@ class DelayBackend:
         return message.id
 
     def schedule_due(self, *, limit: int = 100, now: float | None = None) -> int:
+        """Release due delayed messages into the publisher backend.
+
+        Args:
+            limit: Maximum number of due ids to scan.
+            now: Optional Unix timestamp override.
+
+        Returns:
+            Number of released messages.
+
+        Raises:
+            BackendUnavailableError: If Redis commands fail or a payload is
+                missing.
+        """
+
         now_value = time() if now is None else now
         due_ids = self._execute(
             "redis.zrangebyscore",
@@ -140,6 +200,18 @@ class DelayBackend:
         return released
 
     def _load_message(self, message_id: str) -> Message:
+        """Load a delayed message envelope by id.
+
+        Args:
+            message_id: RedQueue message id.
+
+        Returns:
+            Decoded delayed message.
+
+        Raises:
+            BackendUnavailableError: If the payload key is missing.
+        """
+
         payload = self._execute(
             "redis.get",
             self.redis.get,
@@ -160,6 +232,19 @@ class DelayBackend:
         delay_seconds: float | None,
         run_at: float | None,
     ) -> float:
+        """Calculate a delayed message availability timestamp.
+
+        Args:
+            delay_seconds: Relative delay in seconds.
+            run_at: Absolute Unix timestamp.
+
+        Returns:
+            Unix timestamp when the message becomes due.
+
+        Raises:
+            QueueConfigError: If both values are set or either value is negative.
+        """
+
         if delay_seconds is not None and run_at is not None:
             raise QueueConfigError("delay_seconds and run_at cannot both be set")
         if delay_seconds is not None:
@@ -175,6 +260,15 @@ class DelayBackend:
         return time()
 
     def _encode(self, message: Message) -> bytes:
+        """Encode a delayed message envelope.
+
+        Args:
+            message: Message to encode.
+
+        Returns:
+            Serialized envelope bytes.
+        """
+
         envelope = {
             "id": message.id,
             "queue": message.queue,
@@ -189,6 +283,18 @@ class DelayBackend:
         return self.config.serializer.encode(envelope, queue=self.config.queue)
 
     def _decode(self, payload: bytes) -> Message:
+        """Decode a delayed message envelope.
+
+        Args:
+            payload: Serialized envelope bytes.
+
+        Returns:
+            Decoded delayed message.
+
+        Raises:
+            BackendUnavailableError: If the decoded envelope is not a mapping.
+        """
+
         envelope = self.config.serializer.decode(payload, queue=self.config.queue)
         if not isinstance(envelope, dict):
             raise BackendUnavailableError(
@@ -210,6 +316,20 @@ class DelayBackend:
         )
 
     def _execute(self, action: str, func: Any, *args: Any) -> Any:
+        """Execute a Redis delayed-task command and wrap failures.
+
+        Args:
+            action: Operation identifier.
+            func: Redis command callable.
+            *args: Arguments passed to ``func``.
+
+        Returns:
+            Redis command result.
+
+        Raises:
+            BackendUnavailableError: If the Redis command raises.
+        """
+
         try:
             return func(*args)
         except Exception as exc:
@@ -229,6 +349,13 @@ class DelayBackend:
             ) from exc
 
     def _emit(self, event_type: MonitoringEventType, message: Message) -> None:
+        """Emit a delay monitoring event.
+
+        Args:
+            event_type: Delay event type.
+            message: Message related to the event.
+        """
+
         self.config.monitoring.emit(
             MonitoringEvent(
                 type=event_type,
@@ -240,4 +367,6 @@ class DelayBackend:
 
     @staticmethod
     def _to_text(value: str | bytes) -> str:
+        """Normalize Redis bytes or text to ``str``."""
+
         return value.decode() if isinstance(value, bytes) else value

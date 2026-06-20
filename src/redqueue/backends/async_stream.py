@@ -74,7 +74,12 @@ class AsyncStreamRedis(Protocol):
 
 
 class AsyncStreamBackend(BaseMessageBackend):
-    """Reliable async queue backend implemented with Redis Streams."""
+    """Reliable async queue backend implemented with Redis Streams.
+
+    Attributes:
+        redis: Async Redis client implementing ``AsyncStreamRedis``.
+        capabilities: Redis command capability set.
+    """
 
     backend_name = "stream"
 
@@ -84,6 +89,17 @@ class AsyncStreamBackend(BaseMessageBackend):
         config: QueueConfig,
         capabilities: RedisCapabilities,
     ) -> None:
+        """Initialize an async Streams backend.
+
+        Args:
+            redis: Async Redis client implementing required Streams commands.
+            config: Queue configuration.
+            capabilities: Detected Redis capabilities.
+
+        Raises:
+            RedisCompatibilityError: If Redis Streams are unavailable.
+        """
+
         capabilities.require_streams()
         super().__init__(config)
         self.redis = redis
@@ -96,6 +112,17 @@ class AsyncStreamBackend(BaseMessageBackend):
         config: QueueConfig,
         capabilities: RedisCapabilities,
     ) -> AsyncStreamBackend:
+        """Create and initialize an async Streams backend.
+
+        Args:
+            redis: Async Redis client implementing required Streams commands.
+            config: Queue configuration.
+            capabilities: Detected Redis capabilities.
+
+        Returns:
+            Initialized async Streams backend.
+        """
+
         backend = cls(redis, config, capabilities)
         await backend.ensure_group()
         return backend
@@ -106,14 +133,28 @@ class AsyncStreamBackend(BaseMessageBackend):
         redis: AsyncStreamRedis,
         config: QueueConfig,
     ) -> AsyncStreamBackend:
+        """Create a backend assuming a modern Redis server.
+
+        Args:
+            redis: Async Redis client implementing required Streams commands.
+            config: Queue configuration.
+
+        Returns:
+            Initialized async Streams backend using Redis 7 assumptions.
+        """
+
         return await cls.create(redis, config, RedisCapabilities(RedisVersion(7, 0, 0)))
 
     @property
     def stream_key(self) -> str:
+        """Redis Stream key containing active messages."""
+
         return self.config.key("stream")
 
     @property
     def dead_key(self) -> str:
+        """Redis Stream key containing dead-lettered messages."""
+
         return self.config.key("dead")
 
     async def publish(
@@ -123,6 +164,17 @@ class AsyncStreamBackend(BaseMessageBackend):
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> str:
+        """Append a message to the active Redis Stream.
+
+        Args:
+            payload: Application payload.
+            headers: Optional message metadata.
+            message_id: Optional stable RedQueue message id.
+
+        Returns:
+            RedQueue message id.
+        """
+
         message = Message(
             id=message_id or new_message_id(),
             queue=self.config.queue,
@@ -139,6 +191,16 @@ class AsyncStreamBackend(BaseMessageBackend):
         timeout: float | None = None,
         batch_size: int = 1,
     ) -> Message | list[Message] | None:
+        """Read one or more messages through the consumer group.
+
+        Args:
+            timeout: Optional blocking timeout in seconds.
+            batch_size: Maximum number of messages to read.
+
+        Returns:
+            ``None``, one ``Message``, or a list of messages.
+        """
+
         block = int(timeout * 1000) if timeout is not None else None
         response = await self._execute(
             "redis.xreadgroup",
@@ -160,6 +222,16 @@ class AsyncStreamBackend(BaseMessageBackend):
         return messages
 
     async def ack(self, message: Message) -> None:
+        """Acknowledge a Streams message with ``XACK``.
+
+        Args:
+            message: Message returned by ``consume`` or pending recovery.
+
+        Raises:
+            AckError: If the message has no raw stream id or Redis does not
+                acknowledge it.
+        """
+
         if not message.raw_id:
             raise AckError(
                 "stream message is missing raw Redis stream id",
@@ -184,6 +256,14 @@ class AsyncStreamBackend(BaseMessageBackend):
         self._emit(MonitoringEventType.MESSAGE_ACKED, message)
 
     async def nack(self, message: Message, *, requeue: bool = True) -> None:
+        """Reject a Streams message.
+
+        Args:
+            message: Message returned by ``consume``.
+            requeue: When true, republish the payload and acknowledge the
+                original. When false, move it to the dead-letter stream.
+        """
+
         if requeue:
             await self.publish(
                 message.payload,
@@ -206,6 +286,17 @@ class AsyncStreamBackend(BaseMessageBackend):
         delay: float | None = None,
         reason: str | None = None,
     ) -> None:
+        """Retry a Streams message or dead-letter it.
+
+        Args:
+            message: Message returned by ``consume``.
+            delay: Reserved delay hint for future retry scheduling.
+            reason: Optional diagnostic reason.
+
+        Raises:
+            RetryExceededError: If retry attempts are exhausted.
+        """
+
         if message.attempts >= self.config.retry.max_retries:
             await self._move_to_dead(message)
             self._emit(
@@ -238,6 +329,17 @@ class AsyncStreamBackend(BaseMessageBackend):
         min_idle_ms: int,
         limit: int = 100,
     ) -> list[Message]:
+        """Claim pending messages for the configured consumer.
+
+        Args:
+            min_idle_ms: Minimum idle time in milliseconds before a pending
+                message can be claimed.
+            limit: Maximum number of pending messages to recover.
+
+        Returns:
+            Claimed messages.
+        """
+
         if not self.capabilities.supports_streams_auto_claim:
             pending = await self._execute(
                 "redis.xpending_range",
@@ -277,6 +379,15 @@ class AsyncStreamBackend(BaseMessageBackend):
         return self._parse_autoclaim_response(response)
 
     async def dead_letters(self, *, limit: int = 100) -> list[Message]:
+        """Read messages from the dead-letter stream.
+
+        Args:
+            limit: Maximum number of dead letters to read.
+
+        Returns:
+            Decoded dead-letter messages.
+        """
+
         response = await self._execute(
             "redis.xreadgroup",
             self.redis.xreadgroup,
@@ -289,6 +400,12 @@ class AsyncStreamBackend(BaseMessageBackend):
         return self._parse_read_response(response)
 
     async def requeue_dead(self, message: Message) -> None:
+        """Republish a dead-lettered message to the active stream.
+
+        Args:
+            message: Message returned by ``dead_letters``.
+        """
+
         await self.publish(
             message.payload,
             headers=message.headers,
@@ -304,6 +421,15 @@ class AsyncStreamBackend(BaseMessageBackend):
             )
 
     async def _publish_message(self, message: Message) -> str:
+        """Append an encoded RedQueue message envelope to the stream.
+
+        Args:
+            message: Message to publish.
+
+        Returns:
+            Redis stream entry id as text.
+        """
+
         raw_id = await self._execute(
             "redis.xadd",
             self.redis.xadd,
@@ -322,6 +448,13 @@ class AsyncStreamBackend(BaseMessageBackend):
         return str(raw_id)
 
     async def ensure_group(self) -> None:
+        """Create the configured consumer group if it does not exist.
+
+        Raises:
+            BackendUnavailableError: If Redis rejects group creation for reasons
+                other than ``BUSYGROUP``.
+        """
+
         try:
             await self.redis.xgroup_create(
                 self.stream_key,
@@ -340,6 +473,8 @@ class AsyncStreamBackend(BaseMessageBackend):
             ) from exc
 
     async def _move_to_dead(self, message: Message) -> None:
+        """Append a message to the dead-letter stream and ack the original."""
+
         await self._execute(
             "redis.xadd",
             self.redis.xadd,
@@ -349,6 +484,15 @@ class AsyncStreamBackend(BaseMessageBackend):
         await self.ack(message)
 
     def _parse_read_response(self, response: list[Any]) -> list[Message]:
+        """Parse an ``XREADGROUP`` response.
+
+        Args:
+            response: Redis-py stream response.
+
+        Returns:
+            Decoded messages.
+        """
+
         messages: list[Message] = []
         for _stream, entries in response or []:
             for raw_id, fields in entries:
@@ -356,6 +500,15 @@ class AsyncStreamBackend(BaseMessageBackend):
         return messages
 
     def _parse_autoclaim_response(self, response: Any) -> list[Message]:
+        """Parse an ``XAUTOCLAIM`` response.
+
+        Args:
+            response: Redis-py autoclaim response.
+
+        Returns:
+            Decoded claimed messages.
+        """
+
         if not response:
             return []
         entries = response[1] if len(response) > 1 else []
@@ -365,6 +518,19 @@ class AsyncStreamBackend(BaseMessageBackend):
         ]
 
     def _decode_stream_entry(self, raw_id: Any, fields: dict[Any, Any]) -> Message:
+        """Decode one Redis Stream entry into a ``Message``.
+
+        Args:
+            raw_id: Redis stream entry id, bytes or text.
+            fields: Stream entry field mapping.
+
+        Returns:
+            Decoded message tagged with the raw stream id.
+
+        Raises:
+            BackendUnavailableError: If the entry has no ``payload`` field.
+        """
+
         payload = fields.get("payload") or fields.get(b"payload")
         if payload is None:
             raise BackendUnavailableError(
@@ -379,10 +545,14 @@ class AsyncStreamBackend(BaseMessageBackend):
         )
 
     def _consumer_name(self) -> str:
+        """Return the configured consumer name or the default name."""
+
         return self.config.consumer_name or "redqueue-consumer"
 
     @staticmethod
     def _pending_id(item: Any) -> str:
+        """Extract a message id from an ``XPENDING`` entry."""
+
         if isinstance(item, dict):
             value = item.get("message_id") or item.get("message-id") or item.get("id")
             return value.decode() if isinstance(value, bytes) else str(value)
@@ -391,9 +561,25 @@ class AsyncStreamBackend(BaseMessageBackend):
 
     @staticmethod
     def _to_text(value: Any) -> str:
+        """Normalize Redis bytes or text identifiers to ``str``."""
+
         return value.decode() if isinstance(value, bytes) else str(value)
 
     async def _execute(self, action: str, func: Any, *args: Any) -> Any:
+        """Execute an async Redis Streams command and wrap failures.
+
+        Args:
+            action: Operation identifier.
+            func: Async Redis command callable.
+            *args: Arguments passed to ``func``.
+
+        Returns:
+            Redis command result.
+
+        Raises:
+            BackendUnavailableError: If the Redis command raises.
+        """
+
         try:
             return await func(*args)
         except Exception as exc:

@@ -14,14 +14,30 @@ from redqueue.exceptions import QueueConfigError
 
 
 def new_message_id() -> str:
-    """Create a stable opaque message identifier."""
+    """Create a stable opaque message identifier.
+
+    Returns:
+        Hex-encoded UUID4 string suitable for Redis keys and message metadata.
+    """
 
     return uuid4().hex
 
 
 @dataclass(frozen=True)
 class Message:
-    """A normalized message returned by RedQueue consumers."""
+    """A normalized message returned by RedQueue consumers.
+
+    Attributes:
+        payload: Application payload after serializer decoding.
+        queue: Logical queue name.
+        id: Stable RedQueue message id.
+        headers: User metadata copied into the message envelope.
+        attempts: Number of retry attempts already applied.
+        created_at: Unix timestamp when the message object was created.
+        available_at: Optional Unix timestamp used by delayed messages.
+        backend: Backend name that produced or owns the message.
+        raw_id: Backend-specific id, such as a Redis Streams entry id.
+    """
 
     payload: Any
     queue: str
@@ -34,6 +50,13 @@ class Message:
     raw_id: str | None = None
 
     def __post_init__(self) -> None:
+        """Normalize immutable dataclass fields after initialization.
+
+        Raises:
+            QueueConfigError: If required string fields are empty or timestamps
+                and counters are negative.
+        """
+
         message_id = self._normalize_required(self.id, field_name="id")
         queue = self._normalize_required(self.queue, field_name="queue")
         object.__setattr__(self, "id", message_id)
@@ -49,6 +72,19 @@ class Message:
 
     @staticmethod
     def _normalize_required(value: str, *, field_name: str) -> str:
+        """Validate and trim a required message string field.
+
+        Args:
+            value: Raw field value.
+            field_name: Name included in error messages.
+
+        Returns:
+            Trimmed field value.
+
+        Raises:
+            QueueConfigError: If the value is not a non-empty string.
+        """
+
         if not isinstance(value, str):
             raise QueueConfigError(f"message {field_name} must be a string")
         normalized = value.strip()
@@ -57,11 +93,23 @@ class Message:
         return normalized
 
     def with_attempt(self) -> Message:
-        """Return a copy with attempts incremented by one."""
+        """Return a copy with attempts incremented by one.
+
+        Returns:
+            New immutable ``Message`` instance.
+        """
 
         return replace(self, attempts=self.attempts + 1)
 
     def with_backend(self, backend: str, *, raw_id: str | None = None) -> Message:
-        """Return a copy tagged with backend-specific metadata."""
+        """Return a copy tagged with backend-specific metadata.
+
+        Args:
+            backend: Backend name such as ``list`` or ``stream``.
+            raw_id: Optional backend-specific id.
+
+        Returns:
+            New immutable ``Message`` instance.
+        """
 
         return replace(self, backend=backend, raw_id=raw_id)

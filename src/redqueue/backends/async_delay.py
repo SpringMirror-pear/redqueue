@@ -38,7 +38,13 @@ class AsyncDelayRedis(Protocol):
 
 
 class AsyncDelayBackend:
-    """Async delayed task scheduler implemented with Redis Sorted Set."""
+    """Async delayed task scheduler implemented with Redis Sorted Set.
+
+    Attributes:
+        redis: Async Redis client implementing delayed task commands.
+        config: Queue configuration.
+        publisher: Async backend that receives due messages.
+    """
 
     backend_name = "delay"
 
@@ -48,15 +54,34 @@ class AsyncDelayBackend:
         config: QueueConfig,
         publisher: Any,
     ) -> None:
+        """Initialize the async delay scheduler.
+
+        Args:
+            redis: Async Redis client implementing ``AsyncDelayRedis``.
+            config: Queue configuration.
+            publisher: Async backend exposing ``publish`` for released messages.
+        """
+
         self.redis = redis
         self.config = config
         self.publisher = publisher
 
     @property
     def delayed_key(self) -> str:
+        """Redis Sorted Set key containing delayed message ids."""
+
         return self.config.key("delayed")
 
     def payload_key(self, message_id: str) -> str:
+        """Return the Redis key that stores a delayed message envelope.
+
+        Args:
+            message_id: RedQueue message id.
+
+        Returns:
+            Namespaced Redis string key.
+        """
+
         return self.config.key(f"payload:{message_id}")
 
     async def delay(
@@ -68,6 +93,19 @@ class AsyncDelayBackend:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> str:
+        """Schedule a payload for future async release.
+
+        Args:
+            payload: Application payload.
+            delay_seconds: Relative delay in seconds.
+            run_at: Absolute Unix timestamp when the message is due.
+            headers: Optional message metadata.
+            message_id: Optional stable message id.
+
+        Returns:
+            Scheduled message id.
+        """
+
         available_at = self._available_at(delay_seconds=delay_seconds, run_at=run_at)
         message = Message(
             id=message_id or new_message_id(),
@@ -93,6 +131,16 @@ class AsyncDelayBackend:
         return message.id
 
     async def schedule_due(self, *, limit: int = 100, now: float | None = None) -> int:
+        """Release due delayed messages into the async publisher backend.
+
+        Args:
+            limit: Maximum number of due ids to scan.
+            now: Optional Unix timestamp override.
+
+        Returns:
+            Number of released messages.
+        """
+
         now_value = time() if now is None else now
         due_ids = await self._execute(
             "redis.zrangebyscore",
@@ -139,6 +187,18 @@ class AsyncDelayBackend:
         return released
 
     async def _load_message(self, message_id: str) -> Message:
+        """Load a delayed message envelope by id.
+
+        Args:
+            message_id: RedQueue message id.
+
+        Returns:
+            Decoded delayed message.
+
+        Raises:
+            BackendUnavailableError: If the payload key is missing.
+        """
+
         payload = await self._execute(
             "redis.get",
             self.redis.get,
@@ -159,6 +219,19 @@ class AsyncDelayBackend:
         delay_seconds: float | None,
         run_at: float | None,
     ) -> float:
+        """Calculate a delayed message availability timestamp.
+
+        Args:
+            delay_seconds: Relative delay in seconds.
+            run_at: Absolute Unix timestamp.
+
+        Returns:
+            Unix timestamp when the message becomes due.
+
+        Raises:
+            QueueConfigError: If both values are set or either value is negative.
+        """
+
         if delay_seconds is not None and run_at is not None:
             raise QueueConfigError("delay_seconds and run_at cannot both be set")
         if delay_seconds is not None:
@@ -174,6 +247,15 @@ class AsyncDelayBackend:
         return time()
 
     def _encode(self, message: Message) -> bytes:
+        """Encode a delayed message envelope.
+
+        Args:
+            message: Message to encode.
+
+        Returns:
+            Serialized envelope bytes.
+        """
+
         envelope = {
             "id": message.id,
             "queue": message.queue,
@@ -188,6 +270,18 @@ class AsyncDelayBackend:
         return self.config.serializer.encode(envelope, queue=self.config.queue)
 
     def _decode(self, payload: bytes) -> Message:
+        """Decode a delayed message envelope.
+
+        Args:
+            payload: Serialized envelope bytes.
+
+        Returns:
+            Decoded delayed message.
+
+        Raises:
+            BackendUnavailableError: If the decoded envelope is not a mapping.
+        """
+
         envelope = self.config.serializer.decode(payload, queue=self.config.queue)
         if not isinstance(envelope, dict):
             raise BackendUnavailableError(
@@ -209,6 +303,20 @@ class AsyncDelayBackend:
         )
 
     async def _execute(self, action: str, func: Any, *args: Any) -> Any:
+        """Execute an async Redis delayed-task command and wrap failures.
+
+        Args:
+            action: Operation identifier.
+            func: Async Redis command callable.
+            *args: Arguments passed to ``func``.
+
+        Returns:
+            Redis command result.
+
+        Raises:
+            BackendUnavailableError: If the Redis command raises.
+        """
+
         try:
             return await func(*args)
         except Exception as exc:
@@ -228,6 +336,13 @@ class AsyncDelayBackend:
             ) from exc
 
     def _emit(self, event_type: MonitoringEventType, message: Message) -> None:
+        """Emit a delay monitoring event.
+
+        Args:
+            event_type: Delay event type.
+            message: Message related to the event.
+        """
+
         self.config.monitoring.emit(
             MonitoringEvent(
                 type=event_type,
@@ -239,4 +354,6 @@ class AsyncDelayBackend:
 
     @staticmethod
     def _to_text(value: str | bytes) -> str:
+        """Normalize Redis bytes or text to ``str``."""
+
         return value.decode() if isinstance(value, bytes) else value

@@ -17,7 +17,22 @@ from redqueue.monitoring import MonitoringEvent, MonitoringEventType
 
 
 class QueueClient:
-    """Synchronous queue client."""
+    """Synchronous facade for RedQueue operations.
+
+    The client owns backend selection, Redis capability validation, delay
+    scheduling, and monitoring events for synchronous applications. Callers can
+    use either the List backend or the Streams backend through the same public
+    methods.
+
+    Attributes:
+        config: Normalized queue configuration.
+        redis: Redis client or Redis-compatible object used by backends.
+        capabilities: Redis feature set detected from the server or provided by
+            tests.
+        backend: Concrete List or Streams backend selected from ``config``.
+        delay_backend: Sorted Set scheduler used by ``delay`` and
+            ``schedule_due``.
+    """
 
     def __init__(
         self,
@@ -26,6 +41,21 @@ class QueueClient:
         redis: Any | None = None,
         capabilities: RedisCapabilities | None = None,
     ) -> None:
+        """Initialize the synchronous client and selected backend.
+
+        Args:
+            config: Queue configuration that controls queue name, backend,
+                retry policy, serializer, and monitoring hook.
+            redis: Redis client or protocol-compatible fake. A client is
+                required because backends are created eagerly.
+            capabilities: Optional pre-detected Redis capabilities. When omitted,
+                capabilities are read from Redis during backend creation.
+
+        Raises:
+            TypeError: If no Redis client is available for the selected backend.
+            RedisCompatibilityError: If Redis lacks a required command family.
+        """
+
         self.config = config
         self.redis = redis
         self.capabilities = capabilities
@@ -48,6 +78,26 @@ class QueueClient:
         backend: str | BackendType = BackendType.LIST,
         **options: Any,
     ) -> QueueClient:
+        """Create a client from a Redis URL.
+
+        Args:
+            url: Redis connection URL accepted by ``redis.Redis.from_url``.
+            queue: Logical RedQueue queue name.
+            backend: Backend name or ``BackendType`` value.
+            **options: Additional ``QueueConfig`` options. Tests may also pass
+                ``redis`` or ``capabilities`` to bypass connection creation and
+                capability detection.
+
+        Returns:
+            A ready-to-use synchronous ``QueueClient``.
+
+        Raises:
+            BackendUnavailableError: If Redis ``INFO server`` cannot be read.
+            RedisCompatibilityError: If the selected backend is unsupported by
+                the connected Redis server.
+            QueueConfigError: If configuration values are invalid.
+        """
+
         redis = options.pop("redis", None) or Redis.from_url(url)
         capabilities = options.pop("capabilities", None) or detect_capabilities(
             cast(RedisInfoClient, redis)
@@ -63,6 +113,20 @@ class QueueClient:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> str:
+        """Publish a message immediately or schedule it for later.
+
+        Args:
+            payload: Application payload to serialize into the RedQueue envelope.
+            delay: Optional relative delay in seconds. When set, the message is
+                written to the delayed task store instead of the active backend.
+            headers: Optional metadata stored with the message.
+            message_id: Optional stable message id. When omitted, RedQueue
+                generates one.
+
+        Returns:
+            The RedQueue message id.
+        """
+
         if delay is not None:
             return self.delay(payload, delay_seconds=delay, headers=headers)
         return self.backend.publish(
@@ -77,12 +141,42 @@ class QueueClient:
         timeout: float | None = None,
         batch_size: int = 1,
     ) -> Message | list[Message] | None:
+        """Consume one or more messages from the selected backend.
+
+        Args:
+            timeout: Backend-specific blocking timeout in seconds.
+            batch_size: Maximum number of messages to return. Values greater
+                than one return a list.
+
+        Returns:
+            ``None`` when no message is available, one ``Message`` when
+            ``batch_size`` is one, or a list of messages for batch consumption.
+        """
+
         return self.backend.consume(timeout=timeout, batch_size=batch_size)
 
     def ack(self, message: Message) -> None:
+        """Acknowledge successful processing of a message.
+
+        Args:
+            message: Message returned by ``consume``.
+
+        Raises:
+            AckError: If the message is not present in the backend's processing
+                state.
+        """
+
         self.backend.ack(message)
 
     def nack(self, message: Message, *, requeue: bool = True) -> None:
+        """Reject a message and optionally requeue it.
+
+        Args:
+            message: Message returned by ``consume``.
+            requeue: When true, move the message back to the ready queue. When
+                false, move it to dead letters.
+        """
+
         self.backend.nack(message, requeue=requeue)
 
     def retry(
@@ -92,6 +186,18 @@ class QueueClient:
         delay: float | None = None,
         reason: str | None = None,
     ) -> None:
+        """Retry a message according to the configured retry policy.
+
+        Args:
+            message: Message returned by ``consume``.
+            delay: Reserved delay hint for future delayed retry strategies.
+            reason: Optional diagnostic reason emitted in monitoring events.
+
+        Raises:
+            RetryExceededError: If the message has reached ``max_retries`` and
+                is moved to dead letters.
+        """
+
         self.backend.retry(message, delay=delay, reason=reason)
 
     def delay(
@@ -102,6 +208,22 @@ class QueueClient:
         run_at: float | None = None,
         headers: dict[str, Any] | None = None,
     ) -> str:
+        """Schedule a payload for future delivery.
+
+        Args:
+            payload: Application payload to deliver later.
+            delay_seconds: Relative delay in seconds.
+            run_at: Absolute Unix timestamp when the message becomes due.
+            headers: Optional metadata stored with the message.
+
+        Returns:
+            The scheduled message id.
+
+        Raises:
+            QueueConfigError: If both ``delay_seconds`` and ``run_at`` are set or
+                if either value is negative.
+        """
+
         message_id = self.delay_backend.delay(
             payload,
             delay_seconds=delay_seconds,
@@ -120,26 +242,74 @@ class QueueClient:
         return message_id
 
     def schedule_due(self, *, limit: int = 100, now: float | None = None) -> int:
+        """Move due delayed messages into the active backend.
+
+        Args:
+            limit: Maximum number of due messages to release.
+            now: Optional Unix timestamp override for tests or custom schedulers.
+
+        Returns:
+            Number of released messages.
+        """
+
         return self.delay_backend.schedule_due(limit=limit, now=now)
 
     def recover_stale(self, *, min_idle_ms: int | None = None, limit: int = 100) -> int:
+        """Recover messages left in backend processing state.
+
+        Args:
+            min_idle_ms: Minimum idle time for Streams pending recovery. List
+                recovery ignores this value and requeues processing entries.
+            limit: Maximum number of messages to recover.
+
+        Returns:
+            Number of recovered messages.
+        """
+
         if isinstance(self.backend, StreamBackend):
             idle = min_idle_ms or int(self.config.visibility_timeout_seconds * 1000)
             return len(self.backend.recover_pending(min_idle_ms=idle, limit=limit))
         return self.backend.recover_stale(limit=limit)
 
     def dead_letters(self, *, limit: int = 100) -> list[Message]:
+        """Read dead-lettered messages.
+
+        Args:
+            limit: Maximum number of dead letters to return.
+
+        Returns:
+            Dead-letter messages decoded from the selected backend.
+        """
+
         return self.backend.dead_letters(limit=limit)
 
     def requeue_dead(self, message: Message) -> None:
+        """Move a dead-lettered message back to the ready path.
+
+        Args:
+            message: Message previously returned by ``dead_letters``.
+        """
+
         self.backend.requeue_dead(message)
 
     def close(self) -> None:
+        """Close the underlying Redis client when it exposes ``close``."""
+
         close = getattr(self.redis, "close", None)
         if close is not None:
             close()
 
     def _create_backend(self) -> ListBackend | StreamBackend:
+        """Instantiate the configured concrete backend.
+
+        Returns:
+            A synchronous List or Streams backend.
+
+        Raises:
+            TypeError: If the Redis client is missing.
+            RedisCompatibilityError: If Redis lacks required backend commands.
+        """
+
         if self.config.backend_type is BackendType.LIST:
             if self.redis is None:
                 raise TypeError("redis client is required for List backend")
@@ -159,6 +329,8 @@ class QueueClient:
         )
 
     def _create_delay_backend(self) -> DelayBackend:
+        """Create the Sorted Set delay scheduler for the current backend."""
+
         if self.redis is None:
             raise TypeError("redis client is required for delayed tasks")
         capabilities = self.capabilities or detect_capabilities(

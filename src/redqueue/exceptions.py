@@ -11,14 +11,25 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ErrorContext:
-    """Structured context attached to RedQueue errors."""
+    """Structured context attached to RedQueue errors.
+
+    Attributes:
+        action: Operation name that failed, for example ``message.ack``.
+        queue: Logical queue name related to the error.
+        details: Additional structured diagnostic fields.
+    """
 
     action: str | None = None
     queue: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        """Return only populated context fields."""
+        """Return only populated context fields.
+
+        Returns:
+            Dictionary containing non-empty ``action``, ``queue``, and
+            ``details`` values.
+        """
 
         data: dict[str, Any] = {}
         if self.action:
@@ -31,7 +42,15 @@ class ErrorContext:
 
 
 class RedQueueError(Exception):
-    """Base class for all RedQueue errors."""
+    """Base class for all RedQueue errors.
+
+    ``RedQueueError`` keeps a human-readable message and machine-readable
+    ``ErrorContext`` so callers can log or expose failures consistently.
+
+    Attributes:
+        message: Human-readable error message.
+        context: Structured error context.
+    """
 
     default_message = "RedQueue operation failed"
 
@@ -43,6 +62,15 @@ class RedQueueError(Exception):
         queue: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
+        """Initialize a RedQueue error.
+
+        Args:
+            message: Optional error message. Defaults to ``default_message``.
+            action: Optional operation identifier.
+            queue: Optional logical queue name.
+            details: Optional structured diagnostic fields.
+        """
+
         self.message = message or self.default_message
         self.context = ErrorContext(
             action=action,
@@ -52,6 +80,12 @@ class RedQueueError(Exception):
         super().__init__(self.__str__())
 
     def __str__(self) -> str:
+        """Render the message and structured context as text.
+
+        Returns:
+            Human-readable string suitable for logs and tracebacks.
+        """
+
         context = self.context.as_dict()
         if not context:
             return self.message
@@ -61,7 +95,11 @@ class RedQueueError(Exception):
         return f"{self.message} ({context_text})"
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a structured representation suitable for logs or APIs."""
+        """Return a structured representation suitable for logs or APIs.
+
+        Returns:
+            Dictionary containing exception type, message, and context fields.
+        """
 
         return {
             "type": self.__class__.__name__,
@@ -85,7 +123,18 @@ class RedisCompatibilityError(RedQueueError):
         action: str | None = None,
         queue: str | None = None,
     ) -> RedisCompatibilityError:
-        """Create a compatibility error with a consistent upgrade message."""
+        """Create a compatibility error with a consistent upgrade message.
+
+        Args:
+            feature: Human-readable feature name.
+            current_version: Detected Redis version.
+            required_version: Minimum Redis version required by the feature.
+            action: Optional operation identifier.
+            queue: Optional logical queue name.
+
+        Returns:
+            Configured ``RedisCompatibilityError`` instance.
+        """
 
         return cls(
             f"{feature} requires Redis >= {required_version}, "
@@ -121,7 +170,17 @@ class MessageEncodeError(RedQueueError):
         queue: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> MessageEncodeError:
-        """Wrap a lower-level encoding exception while preserving cause."""
+        """Wrap a lower-level encoding exception while preserving cause.
+
+        Args:
+            exc: Original exception raised by a serializer.
+            action: Operation identifier.
+            queue: Optional logical queue name.
+            details: Optional structured diagnostic fields.
+
+        Returns:
+            ``MessageEncodeError`` with ``__cause__`` set to ``exc``.
+        """
 
         error = cls(str(exc), action=action, queue=queue, details=details)
         error.__cause__ = exc
@@ -142,7 +201,17 @@ class MessageDecodeError(RedQueueError):
         queue: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> MessageDecodeError:
-        """Wrap a lower-level decoding exception while preserving cause."""
+        """Wrap a lower-level decoding exception while preserving cause.
+
+        Args:
+            exc: Original exception raised by a serializer.
+            action: Operation identifier.
+            queue: Optional logical queue name.
+            details: Optional structured diagnostic fields.
+
+        Returns:
+            ``MessageDecodeError`` with ``__cause__`` set to ``exc``.
+        """
 
         error = cls(str(exc), action=action, queue=queue, details=details)
         error.__cause__ = exc

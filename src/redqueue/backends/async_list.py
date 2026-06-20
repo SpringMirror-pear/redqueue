@@ -16,7 +16,10 @@ from redqueue.monitoring import MonitoringEventType
 
 
 class AsyncListRedis(Protocol):
-    """Redis command subset required by the asynchronous List backend."""
+    """Redis command subset required by the asynchronous List backend.
+
+    Implemented by ``redis.asyncio.Redis`` and by async test fakes.
+    """
 
     async def lpush(self, name: str, *values: bytes) -> int: ...
 
@@ -42,7 +45,14 @@ class AsyncListRedis(Protocol):
 
 
 class AsyncListBackend(BaseListBackend):
-    """Reliable async queue backend implemented with Redis List commands."""
+    """Reliable async queue backend implemented with Redis List commands.
+
+    This backend mirrors ``ListBackend`` while awaiting Redis calls.
+
+    Attributes:
+        redis: Async Redis client implementing ``AsyncListRedis``.
+        capabilities: Redis command capability set.
+    """
 
     def __init__(
         self,
@@ -50,6 +60,17 @@ class AsyncListBackend(BaseListBackend):
         config: QueueConfig,
         capabilities: RedisCapabilities,
     ) -> None:
+        """Initialize an asynchronous List backend.
+
+        Args:
+            redis: Async Redis client implementing required List commands.
+            config: Queue configuration.
+            capabilities: Detected Redis capabilities.
+
+        Raises:
+            RedisCompatibilityError: If reliable List commands are unavailable.
+        """
+
         capabilities.require_list_reliable()
         super().__init__(config)
         self.redis = redis
@@ -61,7 +82,15 @@ class AsyncListBackend(BaseListBackend):
         redis: AsyncListRedis,
         config: QueueConfig,
     ) -> AsyncListBackend:
-        """Create a backend for tests or callers that already know Redis is modern."""
+        """Create a backend for tests or callers that already know Redis is modern.
+
+        Args:
+            redis: Async Redis client implementing required List commands.
+            config: Queue configuration.
+
+        Returns:
+            ``AsyncListBackend`` using Redis 7 capability assumptions.
+        """
 
         return cls(redis, config, RedisCapabilities(RedisVersion(7, 0, 0)))
 
@@ -72,6 +101,17 @@ class AsyncListBackend(BaseListBackend):
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> str:
+        """Publish a payload to the ready list.
+
+        Args:
+            payload: Application payload.
+            headers: Optional message metadata.
+            message_id: Optional stable message id.
+
+        Returns:
+            Message id.
+        """
+
         message = Message(
             id=message_id or new_message_id(),
             queue=self.config.queue,
@@ -98,6 +138,16 @@ class AsyncListBackend(BaseListBackend):
         timeout: float | None = None,
         batch_size: int = 1,
     ) -> Message | list[Message] | None:
+        """Consume one or more messages asynchronously.
+
+        Args:
+            timeout: Blocking timeout in seconds.
+            batch_size: Maximum number of messages to consume.
+
+        Returns:
+            ``None``, one ``Message``, or a list of messages.
+        """
+
         timeout_value = timeout or 0
         if batch_size <= 1:
             payload = await self._move_to_processing(timeout_value)
@@ -118,6 +168,15 @@ class AsyncListBackend(BaseListBackend):
         return messages
 
     async def ack(self, message: Message) -> None:
+        """Remove a processed message from the processing list.
+
+        Args:
+            message: Message previously returned by ``consume``.
+
+        Raises:
+            AckError: If the encoded message is not found in processing.
+        """
+
         removed = await self._execute(
             "redis.lrem",
             self.redis.lrem,
@@ -135,6 +194,16 @@ class AsyncListBackend(BaseListBackend):
         self._emit(MonitoringEventType.MESSAGE_ACKED, message)
 
     async def nack(self, message: Message, *, requeue: bool = True) -> None:
+        """Reject a message and move it to ready or dead letters.
+
+        Args:
+            message: Message previously returned by ``consume``.
+            requeue: When true, return to ready; otherwise move to dead letters.
+
+        Raises:
+            AckError: If the encoded message is not found in processing.
+        """
+
         encoded = self._encode(message)
         removed = await self._execute(
             "redis.lrem",
@@ -165,6 +234,18 @@ class AsyncListBackend(BaseListBackend):
         delay: float | None = None,
         reason: str | None = None,
     ) -> None:
+        """Retry a message or dead-letter it when retries are exhausted.
+
+        Args:
+            message: Message previously returned by ``consume``.
+            delay: Reserved delay hint for future retry scheduling.
+            reason: Optional diagnostic reason.
+
+        Raises:
+            AckError: If the message is missing from processing.
+            RetryExceededError: If ``max_retries`` has been reached.
+        """
+
         if message.attempts >= self.config.retry.max_retries:
             await self.nack(message, requeue=False)
             self._emit(
@@ -211,6 +292,15 @@ class AsyncListBackend(BaseListBackend):
         )
 
     async def recover_stale(self, *, limit: int = 100) -> int:
+        """Move messages from processing back to ready.
+
+        Args:
+            limit: Maximum number of processing entries to recover.
+
+        Returns:
+            Number of messages requeued.
+        """
+
         recovered = 0
         entries = await self._execute(
             "redis.lrange",
@@ -245,6 +335,15 @@ class AsyncListBackend(BaseListBackend):
         return recovered
 
     async def dead_letters(self, *, limit: int = 100) -> list[Message]:
+        """Read messages from the dead-letter list.
+
+        Args:
+            limit: Maximum number of dead letters to return.
+
+        Returns:
+            Decoded dead-letter messages.
+        """
+
         entries = await self._execute(
             "redis.lrange",
             self.redis.lrange,
@@ -255,6 +354,15 @@ class AsyncListBackend(BaseListBackend):
         return [self._decode(payload) for payload in entries]
 
     async def requeue_dead(self, message: Message) -> None:
+        """Move a dead-lettered message back to ready.
+
+        Args:
+            message: Message returned by ``dead_letters``.
+
+        Raises:
+            AckError: If the message is not present in the dead-letter list.
+        """
+
         encoded = self._encode(message)
         removed = await self._execute(
             "redis.lrem",
@@ -278,6 +386,15 @@ class AsyncListBackend(BaseListBackend):
         )
 
     async def _move_to_processing(self, timeout: float) -> bytes | None:
+        """Atomically move one message from ready to processing.
+
+        Args:
+            timeout: Blocking timeout in seconds.
+
+        Returns:
+            Serialized payload or ``None`` when no message is available.
+        """
+
         if self.capabilities.supports_list_reliable_blmove:
             return await self._execute(
                 "redis.blmove",
@@ -297,6 +414,20 @@ class AsyncListBackend(BaseListBackend):
         )
 
     async def _execute(self, action: str, func: Any, *args: Any) -> Any:
+        """Execute an async Redis command and wrap failures consistently.
+
+        Args:
+            action: Operation identifier for monitoring and errors.
+            func: Async Redis command callable.
+            *args: Positional arguments passed to ``func``.
+
+        Returns:
+            Redis command result.
+
+        Raises:
+            BackendUnavailableError: If the Redis command raises.
+        """
+
         try:
             return await func(*args)
         except Exception as exc:

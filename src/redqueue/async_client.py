@@ -20,7 +20,20 @@ from redqueue.message import Message
 
 
 class AsyncQueueClient:
-    """Asynchronous queue client with API parity to QueueClient."""
+    """Asynchronous facade for RedQueue operations.
+
+    The async client mirrors ``QueueClient`` while deferring backend creation
+    until ``from_url`` or the first operation. It is intended for applications
+    using ``redis.asyncio`` or compatible async Redis clients.
+
+    Attributes:
+        config: Normalized queue configuration.
+        redis: Async Redis client or protocol-compatible fake.
+        capabilities: Redis feature set detected from the server or injected by
+            tests.
+        backend: Lazily-created async List or Streams backend.
+        delay_backend: Lazily-created async Sorted Set delay scheduler.
+    """
 
     def __init__(
         self,
@@ -29,6 +42,15 @@ class AsyncQueueClient:
         redis: Any | None = None,
         capabilities: RedisCapabilities | None = None,
     ) -> None:
+        """Initialize an async client container.
+
+        Args:
+            config: Queue configuration shared by all async operations.
+            redis: Async Redis client. Required before any backend operation.
+            capabilities: Optional Redis capability set. ``from_url`` detects
+                this automatically.
+        """
+
         self.config = config
         self.redis = redis
         self.capabilities = capabilities
@@ -44,6 +66,24 @@ class AsyncQueueClient:
         backend: str | BackendType = BackendType.LIST,
         **options: Any,
     ) -> AsyncQueueClient:
+        """Create and initialize an async client from a Redis URL.
+
+        Args:
+            url: Redis connection URL accepted by ``redis.asyncio.Redis``.
+            queue: Logical RedQueue queue name.
+            backend: Backend name or ``BackendType`` value.
+            **options: Additional ``QueueConfig`` options. Tests may also pass
+                ``redis`` or ``capabilities``.
+
+        Returns:
+            An initialized ``AsyncQueueClient`` with its primary backend ready.
+
+        Raises:
+            BackendUnavailableError: If Redis ``INFO server`` cannot be read.
+            RedisCompatibilityError: If the selected backend is not supported.
+            QueueConfigError: If configuration values are invalid.
+        """
+
         redis = options.pop("redis", None) or Redis.from_url(url)
         capabilities = options.pop(
             "capabilities",
@@ -62,6 +102,18 @@ class AsyncQueueClient:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
     ) -> str:
+        """Publish a message immediately or schedule it for later.
+
+        Args:
+            payload: Application payload to serialize.
+            delay: Optional relative delay in seconds.
+            headers: Optional metadata stored with the message.
+            message_id: Optional stable message id.
+
+        Returns:
+            The RedQueue message id.
+        """
+
         if delay is not None:
             return await self.delay(payload, delay_seconds=delay, headers=headers)
         backend = await self._ensure_backend()
@@ -77,6 +129,17 @@ class AsyncQueueClient:
         timeout: float | None = None,
         batch_size: int = 1,
     ) -> Message | list[Message] | None:
+        """Consume one or more messages asynchronously.
+
+        Args:
+            timeout: Backend-specific blocking timeout in seconds.
+            batch_size: Maximum number of messages to return.
+
+        Returns:
+            ``None``, a single ``Message``, or a list of messages depending on
+            availability and ``batch_size``.
+        """
+
         backend = await self._ensure_backend()
         return await backend.consume(
             timeout=timeout,
@@ -84,9 +147,23 @@ class AsyncQueueClient:
         )
 
     async def ack(self, message: Message) -> None:
+        """Acknowledge successful async message processing.
+
+        Args:
+            message: Message returned by ``consume``.
+        """
+
         await (await self._ensure_backend()).ack(message)
 
     async def nack(self, message: Message, *, requeue: bool = True) -> None:
+        """Reject a message and optionally requeue it.
+
+        Args:
+            message: Message returned by ``consume``.
+            requeue: When true, return the message to the ready path. When
+                false, move it to dead letters.
+        """
+
         await (await self._ensure_backend()).nack(message, requeue=requeue)
 
     async def retry(
@@ -96,6 +173,14 @@ class AsyncQueueClient:
         delay: float | None = None,
         reason: str | None = None,
     ) -> None:
+        """Retry a message according to ``RetryConfig``.
+
+        Args:
+            message: Message returned by ``consume``.
+            delay: Reserved delay hint for future delayed retry strategies.
+            reason: Optional diagnostic reason emitted in monitoring events.
+        """
+
         await (await self._ensure_backend()).retry(message, delay=delay, reason=reason)
 
     async def delay(
@@ -106,6 +191,18 @@ class AsyncQueueClient:
         run_at: float | None = None,
         headers: dict[str, Any] | None = None,
     ) -> str:
+        """Schedule a payload for future async delivery.
+
+        Args:
+            payload: Application payload to deliver later.
+            delay_seconds: Relative delay in seconds.
+            run_at: Absolute Unix timestamp when the message becomes due.
+            headers: Optional metadata stored with the message.
+
+        Returns:
+            The scheduled message id.
+        """
+
         delay_backend = await self._ensure_delay_backend()
         message_id = await delay_backend.delay(
             payload,
@@ -116,6 +213,16 @@ class AsyncQueueClient:
         return message_id
 
     async def schedule_due(self, *, limit: int = 100, now: float | None = None) -> int:
+        """Move due delayed messages into the active backend.
+
+        Args:
+            limit: Maximum number of due messages to release.
+            now: Optional Unix timestamp override.
+
+        Returns:
+            Number of released messages.
+        """
+
         return await (await self._ensure_delay_backend()).schedule_due(
             limit=limit,
             now=now,
@@ -127,6 +234,16 @@ class AsyncQueueClient:
         min_idle_ms: int | None = None,
         limit: int = 100,
     ) -> int:
+        """Recover stale async processing state.
+
+        Args:
+            min_idle_ms: Minimum idle time for Streams pending recovery.
+            limit: Maximum number of messages to recover.
+
+        Returns:
+            Number of recovered messages.
+        """
+
         backend = await self._ensure_backend()
         if isinstance(backend, AsyncStreamBackend):
             idle = min_idle_ms or int(self.config.visibility_timeout_seconds * 1000)
@@ -134,12 +251,29 @@ class AsyncQueueClient:
         return await backend.recover_stale(limit=limit)
 
     async def dead_letters(self, *, limit: int = 100) -> list[Message]:
+        """Read dead-lettered messages from the selected backend.
+
+        Args:
+            limit: Maximum number of dead letters to return.
+
+        Returns:
+            Dead-letter messages decoded from Redis.
+        """
+
         return await (await self._ensure_backend()).dead_letters(limit=limit)
 
     async def requeue_dead(self, message: Message) -> None:
+        """Move a dead-lettered message back to the ready path.
+
+        Args:
+            message: Message previously returned by ``dead_letters``.
+        """
+
         await (await self._ensure_backend()).requeue_dead(message)
 
     async def close(self) -> None:
+        """Close the underlying async Redis client if it exposes close methods."""
+
         close = getattr(self.redis, "aclose", None) or getattr(
             self.redis,
             "close",
@@ -151,6 +285,16 @@ class AsyncQueueClient:
                 await result
 
     async def _ensure_backend(self) -> AsyncListBackend | AsyncStreamBackend:
+        """Return the initialized primary backend, creating it when needed.
+
+        Returns:
+            Async List or Streams backend.
+
+        Raises:
+            TypeError: If Redis or capabilities are missing.
+            RedisCompatibilityError: If Redis lacks required backend commands.
+        """
+
         if self.backend is not None:
             return self.backend
         if self.config.backend_type is BackendType.LIST:
@@ -178,6 +322,8 @@ class AsyncQueueClient:
         )
 
     async def _ensure_delay_backend(self) -> AsyncDelayBackend:
+        """Return the initialized async delay scheduler, creating it when needed."""
+
         if self.delay_backend is not None:
             return self.delay_backend
         if self.redis is None:

@@ -14,14 +14,34 @@ from redqueue.monitoring import MonitoringEvent, MonitoringEventType
 
 
 class BaseMessageBackend:
-    """Shared message envelope and monitoring behavior."""
+    """Shared message envelope and monitoring behavior.
+
+    Attributes:
+        backend_name: Name written into monitoring events and message metadata.
+        config: Queue configuration used for key generation and serialization.
+    """
 
     backend_name = "backend"
 
     def __init__(self, config: QueueConfig) -> None:
+        """Initialize shared backend state.
+
+        Args:
+            config: Queue configuration owned by the client.
+        """
+
         self.config = config
 
     def _encode(self, message: Message) -> bytes:
+        """Encode a message into a Redis-storable envelope.
+
+        Args:
+            message: Message to encode.
+
+        Returns:
+            Serialized bytes produced by the configured serializer.
+        """
+
         envelope = {
             "id": message.id,
             "queue": message.queue,
@@ -36,6 +56,18 @@ class BaseMessageBackend:
         return self.config.serializer.encode(envelope, queue=self.config.queue)
 
     def _decode(self, payload: bytes) -> Message:
+        """Decode a Redis payload into a ``Message``.
+
+        Args:
+            payload: Serialized message envelope read from Redis.
+
+        Returns:
+            Decoded message tagged with this backend name.
+
+        Raises:
+            BackendUnavailableError: If the decoded envelope is not a mapping.
+        """
+
         envelope = self.config.serializer.decode(payload, queue=self.config.queue)
         if not isinstance(envelope, dict):
             raise BackendUnavailableError(
@@ -63,6 +95,14 @@ class BaseMessageBackend:
         *,
         attributes: dict[str, Any] | None = None,
     ) -> None:
+        """Emit a monitoring event for a message operation.
+
+        Args:
+            event_type: Type of event to emit.
+            message: Message related to the event.
+            attributes: Optional structured event attributes.
+        """
+
         self.config.monitoring.emit(
             MonitoringEvent(
                 type=event_type,
@@ -74,6 +114,13 @@ class BaseMessageBackend:
         )
 
     def _emit_backend_error(self, action: str, error: str | None = None) -> None:
+        """Emit a backend error monitoring event.
+
+        Args:
+            action: Redis command or backend action that failed.
+            error: Optional text representation of the underlying error.
+        """
+
         self.config.monitoring.emit(
             MonitoringEvent(
                 type=MonitoringEventType.BACKEND_ERROR,
@@ -92,12 +139,18 @@ class BaseListBackend(BaseMessageBackend):
 
     @property
     def ready_key(self) -> str:
+        """Redis List key holding messages ready for delivery."""
+
         return self.config.key("ready")
 
     @property
     def processing_key(self) -> str:
+        """Redis List key holding consumed but unacknowledged messages."""
+
         return self.config.key("processing")
 
     @property
     def dead_key(self) -> str:
+        """Redis List key holding dead-lettered messages."""
+
         return self.config.key("dead")
