@@ -54,6 +54,9 @@ testpaths = ["tests"]
 markers = [
   "integration: tests that require external services such as Redis",
   "contract: backend behavior contract tests",
+  "availability: high-availability and failure-recovery behavior tests",
+  "performance: deterministic in-memory performance baseline tests",
+  "concurrency: concurrent publish and consume behavior tests",
 ]
 
 [tool.ruff]

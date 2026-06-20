@@ -278,11 +278,156 @@ Run integration tests with a local Redis server:
 REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m integration
 ```
 
+Run availability tests:
+
+```bash
+PYTHONPATH=src python -m pytest -m availability
+```
+
+Run deterministic in-memory performance tests:
+
+```bash
+PYTHONPATH=src python -m pytest -m performance
+```
+
+Run real Redis availability tests:
+
+```bash
+REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "integration and availability"
+```
+
+Run real Redis performance tests:
+
+```bash
+REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "integration and performance"
+```
+
+Run real Redis concurrency tests:
+
+```bash
+REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "integration and concurrency"
+```
+
 使用本地 Redis 运行集成测试：
 
 ```bash
 REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m integration
 ```
+
+运行可用性测试：
+
+```bash
+PYTHONPATH=src python -m pytest -m availability
+```
+
+运行确定性的内存性能测试：
+
+```bash
+PYTHONPATH=src python -m pytest -m performance
+```
+
+运行真实 Redis 可用性测试：
+
+```bash
+REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "integration and availability"
+```
+
+运行真实 Redis 性能测试：
+
+```bash
+REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "integration and performance"
+```
+
+运行真实 Redis 高并发测试：
+
+```bash
+REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "integration and concurrency"
+```
+
+## Availability Results / 可用性测试结果
+
+Latest local run on Python `3.14.5`:
+
+- Full test suite without `REDQUEUE_REDIS_URL`: `69 passed, 8 skipped`.
+- Real Redis availability suite: `3 passed` with
+  `redis://127.0.0.1:6379/0`.
+- Real Redis server: Redis for Windows `5.0.14.1`.
+- Availability suite: covers List processing recovery, List dead-letter
+  requeue, Streams Redis `<5.0` compatibility rejection, Streams Redis 5.x
+  pending recovery fallback, Streams dead-letter requeue, delayed task publish
+  failure rollback, missing delayed payload errors, async List recovery, async
+  Streams dead-letter requeue, and async delayed task rollback.
+- Real Redis availability suite additionally validates List recovery, Streams
+  dead-letter requeue, and delayed task rollback against a running Redis server.
+
+Python `3.14.5` 最新本地运行结果：
+
+- 未设置 `REDQUEUE_REDIS_URL` 时的完整测试套件：`69 passed, 8 skipped`。
+- 真实 Redis 可用性套件：使用 `redis://127.0.0.1:6379/0` 时 `3 passed`。
+- 真实 Redis 服务端：Redis for Windows `5.0.14.1`。
+- 可用性套件覆盖：List processing 恢复、List 死信重放、Streams Redis
+  `<5.0` 兼容性拒绝、Streams Redis 5.x pending 恢复回退、Streams 死信
+  重放、延迟任务发布失败回滚、延迟 payload 缺失错误、异步 List 恢复、异步
+  Streams 死信重放和异步延迟任务回滚。
+- 真实 Redis 可用性套件额外验证了运行中 Redis 服务上的 List 恢复、Streams
+  死信重放和延迟任务回滚。
+
+## Performance Results / 性能测试结果
+
+The performance suite uses deterministic in-memory Redis fakes. It measures
+RedQueue overhead without network latency and is intended as a regression
+baseline, not as a Redis server benchmark.
+
+Real Redis performance tests were also run against Redis for Windows
+`5.0.14.1`. Redis for Windows has extra platform and compatibility overhead, so
+these numbers are only a local reference and do not represent expected Linux
+production performance.
+
+性能套件使用确定性的内存 Redis fake。它衡量 RedQueue 自身开销，不包含网络延迟，
+用于回归基线，不代表 Redis 服务端性能。
+
+真实 Redis 性能测试使用 Redis for Windows `5.0.14.1`。Redis for Windows
+存在额外的平台和兼容层开销，因此这些数字只作为本地参考，不代表 Linux 线上环境
+的预期性能。
+
+Latest local baseline on Python `3.14.5`:
+
+| Scenario | Operations | Elapsed | Throughput |
+| --- | ---: | ---: | ---: |
+| JSON encode + decode | 10,000 | 0.064742s | 154,459 ops/s |
+| Sync List publish + consume + ack | 2,000 | 0.042705s | 46,833 ops/s |
+| Sync Streams publish + consume + ack | 1,000 | 0.091318s | 10,951 ops/s |
+| Delay schedule + release | 1,000 | 0.033192s | 30,127 ops/s |
+| Async List publish + consume + ack | 1,000 | 0.023531s | 42,497 ops/s |
+
+Latest real Redis baseline on Python `3.14.5` and Redis for Windows
+`5.0.14.1`:
+
+| Scenario | Operations | Elapsed | Throughput |
+| --- | ---: | ---: | ---: |
+| Real Redis List publish + consume + ack | 200 | 0.045230s | 4,422 ops/s |
+| Real Redis Streams publish + consume + ack | 100 | 0.027108s | 3,689 ops/s |
+| Real Redis delay schedule + release | 100 | 0.056498s | 1,770 ops/s |
+| Real Redis concurrent List publish + consume + ack | 200 | 1.059509s | 189 ops/s |
+
+Python `3.14.5` 最新本地基线：
+
+| 场景 | 操作数 | 耗时 | 吞吐量 |
+| --- | ---: | ---: | ---: |
+| JSON 编码 + 解码 | 10,000 | 0.064742s | 154,459 ops/s |
+| 同步 List 发布 + 消费 + ack | 2,000 | 0.042705s | 46,833 ops/s |
+| 同步 Streams 发布 + 消费 + ack | 1,000 | 0.091318s | 10,951 ops/s |
+| 延迟任务调度 + 释放 | 1,000 | 0.033192s | 30,127 ops/s |
+| 异步 List 发布 + 消费 + ack | 1,000 | 0.023531s | 42,497 ops/s |
+
+Python `3.14.5` 和 Redis for Windows `5.0.14.1` 最新真实 Redis 基线：
+
+| 场景 | 操作数 | 耗时 | 吞吐量 |
+| --- | ---: | ---: | ---: |
+| 真实 Redis List 发布 + 消费 + ack | 200 | 0.045230s | 4,422 ops/s |
+| 真实 Redis Streams 发布 + 消费 + ack | 100 | 0.027108s | 3,689 ops/s |
+| 真实 Redis 延迟任务调度 + 释放 | 100 | 0.056498s | 1,770 ops/s |
+| 真实 Redis 并发 List 发布 + 消费 + ack | 200 | 1.059509s | 189 ops/s |
 
 
 ## License / 许可证
