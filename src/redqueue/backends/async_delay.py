@@ -115,18 +115,23 @@ class AsyncDelayBackend:
             available_at=available_at,
             backend=self.backend_name,
         )
+        payload_key = self.payload_key(message.id)
         await self._execute(
             "redis.set",
             self.redis.set,
-            self.payload_key(message.id),
+            payload_key,
             self._encode(message),
         )
-        await self._execute(
-            "redis.zadd",
-            self.redis.zadd,
-            self.delayed_key,
-            {message.id: available_at},
-        )
+        try:
+            await self._execute(
+                "redis.zadd",
+                self.redis.zadd,
+                self.delayed_key,
+                {message.id: available_at},
+            )
+        except Exception:
+            await self._execute("redis.delete", self.redis.delete, payload_key)
+            raise
         self._emit(MonitoringEventType.DELAY_SCHEDULED, message)
         return message.id
 
@@ -300,6 +305,7 @@ class AsyncDelayBackend:
             available_at=envelope.get("available_at"),
             backend=self.backend_name,
             raw_id=envelope.get("raw_id"),
+            raw_payload=payload,
         )
 
     async def _execute(self, action: str, func: Any, *args: Any) -> Any:

@@ -37,6 +37,8 @@ class Message:
         available_at: Optional Unix timestamp used by delayed messages.
         backend: Backend name that produced or owns the message.
         raw_id: Backend-specific id, such as a Redis Streams entry id.
+        raw_payload: Original serialized Redis payload used for exact removal
+            from Redis Lists when serializers are not byte-deterministic.
     """
 
     payload: Any
@@ -48,6 +50,7 @@ class Message:
     available_at: float | None = None
     backend: str | None = None
     raw_id: str | None = None
+    raw_payload: bytes | None = None
 
     def __post_init__(self) -> None:
         """Normalize immutable dataclass fields after initialization.
@@ -101,15 +104,27 @@ class Message:
 
         return replace(self, attempts=self.attempts + 1)
 
-    def with_backend(self, backend: str, *, raw_id: str | None = None) -> Message:
+    def with_backend(
+        self,
+        backend: str,
+        *,
+        raw_id: str | None = None,
+        raw_payload: bytes | None = None,
+    ) -> Message:
         """Return a copy tagged with backend-specific metadata.
 
         Args:
             backend: Backend name such as ``list`` or ``stream``.
             raw_id: Optional backend-specific id.
+            raw_payload: Optional original serialized Redis payload.
 
         Returns:
             New immutable ``Message`` instance.
         """
 
-        return replace(self, backend=backend, raw_id=raw_id)
+        return replace(
+            self,
+            backend=backend,
+            raw_id=raw_id,
+            raw_payload=raw_payload,
+        )

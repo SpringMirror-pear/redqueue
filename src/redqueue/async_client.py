@@ -17,6 +17,7 @@ from redqueue.compat import (
 )
 from redqueue.config import BackendType, QueueConfig
 from redqueue.message import Message
+from redqueue.monitoring import MonitoringEvent, MonitoringEventType
 
 
 class AsyncQueueClient:
@@ -56,6 +57,13 @@ class AsyncQueueClient:
         self.capabilities = capabilities
         self.backend: AsyncListBackend | AsyncStreamBackend | None = None
         self.delay_backend: AsyncDelayBackend | None = None
+        self.config.monitoring.emit(
+            MonitoringEvent(
+                type=MonitoringEventType.CLIENT_CREATED,
+                queue=config.queue,
+                backend=config.backend_type.value,
+            )
+        )
 
     @classmethod
     async def from_url(

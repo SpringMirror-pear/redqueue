@@ -4,6 +4,7 @@
 """Tests for the RedQueue project skeleton and core models."""
 
 import asyncio
+import json
 import unittest
 
 from redqueue import (
@@ -47,7 +48,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.10.0")
+        self.assertEqual(__version__, "0.10.1")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -334,6 +335,21 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertIs(events[0].type, MonitoringEventType.CLIENT_CREATED)
         self.assertIs(events[-1].type, MonitoringEventType.MESSAGE_PUBLISHED)
 
+    def test_async_client_emits_monitoring_event(self) -> None:
+        async def run() -> InMemoryMonitoringHook:
+            hook = InMemoryMonitoringHook()
+            AsyncQueueClient(
+                QueueConfig(queue="jobs", monitoring=hook),
+                redis=FakeAsyncListRedis(),
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            return hook
+
+        hook = asyncio.run(run())
+
+        self.assertEqual(len(hook.events), 1)
+        self.assertIs(hook.events[0].type, MonitoringEventType.CLIENT_CREATED)
+
     def test_monitoring_event_to_dict_excludes_payload(self) -> None:
         event = MonitoringEvent(
             type=MonitoringEventType.MESSAGE_PUBLISHED,
@@ -407,6 +423,38 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertEqual(redis.lists[client.config.key("processing")], [])
 
+    def test_sync_list_backend_ack_uses_original_serialized_payload(self) -> None:
+        class NonDeterministicSerializer:
+            content_type = "application/x-redqueue-test"
+
+            def __init__(self) -> None:
+                self.counter = 0
+
+            def encode(self, payload: object, *, queue: str | None = None) -> bytes:
+                self.counter += 1
+                return json.dumps(
+                    {"envelope": payload, "nonce": self.counter},
+                    separators=(",", ":"),
+                ).encode()
+
+            def decode(self, payload: bytes, *, queue: str | None = None) -> object:
+                return json.loads(payload.decode())["envelope"]
+
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(queue="emails", serializer=NonDeterministicSerializer()),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        client.publish({"to": "user@example.com"})
+        message = client.consume(timeout=1)
+
+        self.assertIsInstance(message, Message)
+        client.ack(message)
+
+        self.assertEqual(redis.lists[client.config.key("processing")], [])
+
     def test_sync_list_backend_consumes_with_brpoplpush_on_old_redis(self) -> None:
         redis = FakeListRedis()
         client = QueueClient(
@@ -438,6 +486,39 @@ class ProjectSkeletonTests(unittest.TestCase):
         message = client.consume(timeout=1)
         client.nack(message, requeue=False)
 
+        self.assertEqual(len(redis.lists[client.config.key("dead")]), 1)
+
+    def test_sync_list_backend_nack_uses_original_serialized_payload(self) -> None:
+        class NonDeterministicSerializer:
+            content_type = "application/x-redqueue-test"
+
+            def __init__(self) -> None:
+                self.counter = 0
+
+            def encode(self, payload: object, *, queue: str | None = None) -> bytes:
+                self.counter += 1
+                return json.dumps(
+                    {"envelope": payload, "nonce": self.counter},
+                    separators=(",", ":"),
+                ).encode()
+
+            def decode(self, payload: bytes, *, queue: str | None = None) -> object:
+                return json.loads(payload.decode())["envelope"]
+
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(queue="emails", serializer=NonDeterministicSerializer()),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        client.publish({"to": "user@example.com"})
+        message = client.consume(timeout=1)
+
+        self.assertIsInstance(message, Message)
+        client.nack(message, requeue=False)
+
+        self.assertEqual(redis.lists[client.config.key("processing")], [])
         self.assertEqual(len(redis.lists[client.config.key("dead")]), 1)
 
     def test_sync_list_backend_retry_increments_attempts_and_dead_letters(self) -> None:
@@ -495,6 +576,41 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertTrue(message_id)
         self.assertIn("aclose", redis.commands)
+
+    def test_async_list_backend_ack_uses_original_serialized_payload(self) -> None:
+        class NonDeterministicSerializer:
+            content_type = "application/x-redqueue-test"
+
+            def __init__(self) -> None:
+                self.counter = 0
+
+            def encode(self, payload: object, *, queue: str | None = None) -> bytes:
+                self.counter += 1
+                return json.dumps(
+                    {"envelope": payload, "nonce": self.counter},
+                    separators=(",", ":"),
+                ).encode()
+
+            def decode(self, payload: bytes, *, queue: str | None = None) -> object:
+                return json.loads(payload.decode())["envelope"]
+
+        async def run() -> FakeAsyncListRedis:
+            redis = FakeAsyncListRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="jobs", serializer=NonDeterministicSerializer()),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            await client.publish({"task": "sync"})
+            message = await client.consume(timeout=1)
+
+            self.assertIsInstance(message, Message)
+            await client.ack(message)
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertEqual(redis.lists["rq:{jobs}:processing"], [])
 
     def test_async_list_backend_uses_brpoplpush_on_old_redis(self) -> None:
         async def run() -> FakeAsyncListRedis:
@@ -592,6 +708,11 @@ class ProjectSkeletonTests(unittest.TestCase):
             client.retry(retried, reason="permanent")
 
         self.assertTrue(redis.streams["rq:{events}:dead"])
+        self.assertIn(
+            (client.config.key("dead"), client.config.consumer_group),
+            redis.groups,
+        )
+        self.assertEqual(client.dead_letters()[0].id, retried.id)
 
     def test_async_stream_backend_publish_consume_ack(self) -> None:
         async def run() -> tuple[FakeAsyncStreamRedis, str]:
@@ -614,6 +735,27 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertTrue(message_id)
         self.assertIn("xgroup_create", redis.commands)
         self.assertIn("xack", redis.commands)
+
+    def test_async_stream_backend_dead_letters_ensure_group(self) -> None:
+        async def run() -> tuple[FakeAsyncStreamRedis, str, str]:
+            redis = FakeAsyncStreamRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="events", backend="stream"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            await client.publish({"event": "created"})
+            message = await client.consume(timeout=1)
+
+            self.assertIsInstance(message, Message)
+            await client.nack(message, requeue=False)
+            dead = await client.dead_letters()
+            return redis, client.config.key("dead"), dead[0].id
+
+        redis, dead_key, dead_id = asyncio.run(run())
+
+        self.assertTrue(dead_id)
+        self.assertIn((dead_key, "redqueue"), redis.groups)
 
     def test_delay_backend_releases_only_due_messages_once(self) -> None:
         redis = FakeListRedis()
@@ -639,6 +781,25 @@ class ProjectSkeletonTests(unittest.TestCase):
         event_types = [event.type for event in hook.events]
         self.assertIn(MonitoringEventType.DELAY_SCHEDULED, event_types)
         self.assertIn(MonitoringEventType.DELAY_RELEASED, event_types)
+        self.assertEqual(event_types.count(MonitoringEventType.DELAY_SCHEDULED), 2)
+
+    def test_delay_backend_cleans_payload_when_zadd_fails(self) -> None:
+        class BrokenZaddRedis(FakeListRedis):
+            def zadd(self, name: str, mapping: dict[str, float]) -> int:
+                super().zadd(name, mapping)
+                raise RuntimeError("zadd failed")
+
+        redis = BrokenZaddRedis()
+        client = QueueClient(
+            QueueConfig(queue="emails"),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        with self.assertRaises(BackendUnavailableError):
+            client.delay({"to": "due@example.com"}, run_at=100)
+
+        self.assertFalse(redis.values)
 
     def test_delay_backend_restores_zset_when_publish_fails(self) -> None:
         class BrokenPublisher:
@@ -686,6 +847,27 @@ class ProjectSkeletonTests(unittest.TestCase):
         redis, message_id = asyncio.run(run())
 
         self.assertNotIn(message_id, redis.sorted_sets["rq:{jobs}:delayed"])
+
+    def test_async_delay_backend_cleans_payload_when_zadd_fails(self) -> None:
+        class BrokenAsyncZaddRedis(FakeAsyncListRedis):
+            async def zadd(self, name: str, mapping: dict[str, float]) -> int:
+                await super().zadd(name, mapping)
+                raise RuntimeError("zadd failed")
+
+        async def run() -> FakeAsyncListRedis:
+            redis = BrokenAsyncZaddRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="jobs"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            with self.assertRaises(BackendUnavailableError):
+                await client.delay({"task": "later"}, run_at=100)
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertFalse(redis.values)
 
     def test_list_backend_recovers_processing_and_requeues_dead_letter(self) -> None:
         redis = FakeListRedis()

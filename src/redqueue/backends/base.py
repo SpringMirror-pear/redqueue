@@ -86,6 +86,7 @@ class BaseMessageBackend:
             available_at=envelope.get("available_at"),
             backend=self.backend_name,
             raw_id=envelope.get("raw_id"),
+            raw_payload=payload,
         )
 
     def _emit(

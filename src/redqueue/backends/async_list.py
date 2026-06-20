@@ -123,7 +123,7 @@ class AsyncListBackend(BaseListBackend):
             "redis.lpush",
             self.redis.lpush,
             self.ready_key,
-            self._encode(message),
+            message.raw_payload or self._encode(message),
         )
         self._emit(
             MonitoringEventType.MESSAGE_PUBLISHED,
@@ -182,7 +182,7 @@ class AsyncListBackend(BaseListBackend):
             self.redis.lrem,
             self.processing_key,
             1,
-            self._encode(message),
+            message.raw_payload or self._encode(message),
         )
         if removed < 1:
             raise AckError(
@@ -204,7 +204,7 @@ class AsyncListBackend(BaseListBackend):
             AckError: If the encoded message is not found in processing.
         """
 
-        encoded = self._encode(message)
+        encoded = message.raw_payload or self._encode(message)
         removed = await self._execute(
             "redis.lrem",
             self.redis.lrem,
@@ -270,7 +270,7 @@ class AsyncListBackend(BaseListBackend):
             self.redis.lrem,
             self.processing_key,
             1,
-            self._encode(message),
+            message.raw_payload or self._encode(message),
         )
         if removed < 1:
             raise AckError(
@@ -363,7 +363,7 @@ class AsyncListBackend(BaseListBackend):
             AckError: If the message is not present in the dead-letter list.
         """
 
-        encoded = self._encode(message)
+        encoded = message.raw_payload or self._encode(message)
         removed = await self._execute(
             "redis.lrem",
             self.redis.lrem,

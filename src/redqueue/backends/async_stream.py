@@ -124,7 +124,7 @@ class AsyncStreamBackend(BaseMessageBackend):
         """
 
         backend = cls(redis, config, capabilities)
-        await backend.ensure_group()
+        await backend.ensure_group(backend.stream_key)
         return backend
 
     @classmethod
@@ -388,6 +388,7 @@ class AsyncStreamBackend(BaseMessageBackend):
             Decoded dead-letter messages.
         """
 
+        await self.ensure_group(self.dead_key)
         response = await self._execute(
             "redis.xreadgroup",
             self.redis.xreadgroup,
@@ -445,10 +446,13 @@ class AsyncStreamBackend(BaseMessageBackend):
             published,
             attributes={"key": self.stream_key},
         )
-        return str(raw_id)
+        return self._to_text(raw_id)
 
-    async def ensure_group(self) -> None:
+    async def ensure_group(self, stream_key: str) -> None:
         """Create the configured consumer group if it does not exist.
+
+        Args:
+            stream_key: Redis Stream key that should contain the group.
 
         Raises:
             BackendUnavailableError: If Redis rejects group creation for reasons
@@ -457,7 +461,7 @@ class AsyncStreamBackend(BaseMessageBackend):
 
         try:
             await self.redis.xgroup_create(
-                self.stream_key,
+                stream_key,
                 self.config.consumer_group,
                 id="0",
                 mkstream=True,
@@ -475,6 +479,7 @@ class AsyncStreamBackend(BaseMessageBackend):
     async def _move_to_dead(self, message: Message) -> None:
         """Append a message to the dead-letter stream and ack the original."""
 
+        await self.ensure_group(self.dead_key)
         await self._execute(
             "redis.xadd",
             self.redis.xadd,

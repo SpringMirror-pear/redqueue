@@ -7,6 +7,46 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.10.1] - 2026-06-20
+
+### Fixed
+
+- Fixed Redis List `ack`, `nack`, `retry`, and dead-letter requeue when custom
+  serializers do not produce deterministic bytes.
+- Fixed delayed task scheduling cleanup so payload keys are removed if `ZADD`
+  fails after `SET`.
+- Fixed Streams dead-letter reads and moves by ensuring the consumer group also
+  exists on the dead-letter stream.
+- Fixed async client creation monitoring so `AsyncQueueClient` emits the same
+  `client.created` event as the synchronous client.
+- Removed duplicate delay scheduling monitoring events from the synchronous
+  client facade.
+- Normalized internal Redis Streams entry ids returned as bytes.
+
+### 修复
+
+- 修复自定义序列化器输出字节不稳定时，Redis List `ack`、`nack`、`retry`
+  和死信重放无法精确删除原始消息的问题。
+- 修复延迟任务在 `SET` 成功但 `ZADD` 失败时残留 payload key 的问题。
+- 修复 Streams 死信读取和搬移前未确保死信 stream 消费组存在的问题。
+- 修复异步客户端创建时未与同步客户端一致发出 `client.created` 监控事件的问题。
+- 移除同步客户端门面层重复发出的延迟调度监控事件。
+- 统一规范化 Redis Streams 返回的 bytes 类型 entry id。
+
+### Validation
+
+- `python -m ruff check .`
+- `PYTHONPATH=src python -m mypy`
+- `PYTHONPATH=src python -m pytest`
+- `REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m integration`
+
+### 验证
+
+- `python -m ruff check .`
+- `PYTHONPATH=src python -m mypy`
+- `PYTHONPATH=src python -m pytest`
+- `REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m integration`
+
 ## [0.10.0] - 2026-06-20
 
 ### Added

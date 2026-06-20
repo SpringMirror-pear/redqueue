@@ -230,15 +230,6 @@ class QueueClient:
             run_at=run_at,
             headers=headers,
         )
-        self.config.monitoring.emit(
-            MonitoringEvent(
-                type=MonitoringEventType.DELAY_SCHEDULED,
-                queue=self.config.queue,
-                message_id=message_id,
-                backend=self.config.backend_type.value,
-                attributes={"delay_seconds": delay_seconds, "run_at": run_at},
-            )
-        )
         return message_id
 
     def schedule_due(self, *, limit: int = 100, now: float | None = None) -> int:

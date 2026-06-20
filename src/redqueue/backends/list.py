@@ -123,7 +123,7 @@ class ListBackend(BaseListBackend):
             headers=headers or {},
             backend=self.backend_name,
         )
-        encoded = self._encode(message)
+        encoded = message.raw_payload or self._encode(message)
         self._execute("redis.lpush", self.redis.lpush, self.ready_key, encoded)
         self._emit(
             MonitoringEventType.MESSAGE_PUBLISHED,
@@ -177,7 +177,7 @@ class ListBackend(BaseListBackend):
             AckError: If the encoded message is not found in processing.
         """
 
-        encoded = self._encode(message)
+        encoded = message.raw_payload or self._encode(message)
         removed = self._execute(
             "redis.lrem",
             self.redis.lrem,
@@ -205,7 +205,7 @@ class ListBackend(BaseListBackend):
             AckError: If the encoded message is not found in processing.
         """
 
-        encoded = self._encode(message)
+        encoded = message.raw_payload or self._encode(message)
         removed = self._execute(
             "redis.lrem",
             self.redis.lrem,
@@ -266,7 +266,7 @@ class ListBackend(BaseListBackend):
             )
 
         retried = message.with_attempt()
-        old_encoded = self._encode(message)
+        old_encoded = message.raw_payload or self._encode(message)
         removed = self._execute(
             "redis.lrem",
             self.redis.lrem,
@@ -360,7 +360,7 @@ class ListBackend(BaseListBackend):
             AckError: If the message is not present in the dead-letter list.
         """
 
-        encoded = self._encode(message)
+        encoded = message.raw_payload or self._encode(message)
         removed = self._execute(
             "redis.lrem",
             self.redis.lrem,
