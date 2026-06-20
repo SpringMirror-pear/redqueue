@@ -12,6 +12,7 @@ from redis import Redis
 from redqueue.backends import DelayBackend, ListBackend, StreamBackend
 from redqueue.compat import RedisCapabilities, RedisInfoClient, detect_capabilities
 from redqueue.config import BackendType, QueueConfig
+from redqueue.connection import RedisConnectionManager
 from redqueue.message import Message
 from redqueue.monitoring import MonitoringEvent, MonitoringEventType
 
@@ -40,6 +41,7 @@ class QueueClient:
         *,
         redis: Any | None = None,
         capabilities: RedisCapabilities | None = None,
+        owns_redis: bool = True,
     ) -> None:
         """Initialize the synchronous client and selected backend.
 
@@ -50,6 +52,9 @@ class QueueClient:
                 required because backends are created eagerly.
             capabilities: Optional pre-detected Redis capabilities. When omitted,
                 capabilities are read from Redis during backend creation.
+            owns_redis: When true, ``close`` closes the Redis client. Direct
+                construction defaults to true; ``from_url`` uses false for
+                injected Redis clients and connection-manager clients.
 
         Raises:
             TypeError: If no Redis client is available for the selected backend.
@@ -59,6 +64,7 @@ class QueueClient:
         self.config = config
         self.redis = redis
         self.capabilities = capabilities
+        self._owns_redis = owns_redis
         self.backend = self._create_backend()
         self.delay_backend = self._create_delay_backend()
         self.config.monitoring.emit(
@@ -76,6 +82,7 @@ class QueueClient:
         *,
         queue: str,
         backend: str | BackendType = BackendType.LIST,
+        connection_manager: RedisConnectionManager | None = None,
         **options: Any,
     ) -> QueueClient:
         """Create a client from a Redis URL.
@@ -84,9 +91,11 @@ class QueueClient:
             url: Redis connection URL accepted by ``redis.Redis.from_url``.
             queue: Logical RedQueue queue name.
             backend: Backend name or ``BackendType`` value.
+            connection_manager: Optional connection manager used to create a
+                client from a shared pool.
             **options: Additional ``QueueConfig`` options. Tests may also pass
-                ``redis`` or ``capabilities`` to bypass connection creation and
-                capability detection.
+                ``redis``, ``capabilities``, or ``pool_options`` to bypass or
+                customize connection creation.
 
         Returns:
             A ready-to-use synchronous ``QueueClient``.
@@ -98,12 +107,25 @@ class QueueClient:
             QueueConfigError: If configuration values are invalid.
         """
 
-        redis = options.pop("redis", None) or Redis.from_url(url)
+        redis = options.pop("redis", None)
+        pool_options = options.pop("pool_options", None) or {}
+        owns_redis = False
+        if redis is None:
+            if connection_manager is not None:
+                redis = connection_manager.redis()
+            else:
+                redis = Redis.from_url(url, **pool_options)
+                owns_redis = True
         capabilities = options.pop("capabilities", None) or detect_capabilities(
             cast(RedisInfoClient, redis)
         )
         config = QueueConfig(queue=queue, backend=backend, **options)
-        return cls(config=config, redis=redis, capabilities=capabilities)
+        return cls(
+            config=config,
+            redis=redis,
+            capabilities=capabilities,
+            owns_redis=owns_redis,
+        )
 
     def publish(
         self,
@@ -284,11 +306,29 @@ class QueueClient:
         self.backend.requeue_dead(message)
 
     def close(self) -> None:
-        """Close the underlying Redis client when it exposes ``close``."""
+        """Close the Redis client when this client owns it."""
+
+        if not self._owns_redis:
+            return
 
         close = getattr(self.redis, "close", None)
         if close is not None:
             close()
+
+    def __enter__(self) -> QueueClient:
+        """Enter a synchronous resource-management context."""
+
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> None:
+        """Close owned resources when leaving a context manager."""
+
+        self.close()
 
     def _create_backend(self) -> ListBackend | StreamBackend:
         """Instantiate the configured concrete backend.

@@ -19,6 +19,22 @@ This document describes how RedQueue releases are prepared and published.
 - `0.10.0dev13` 是首个正式版本前的最后开发里程碑。
 - `0.10.0` 是首个正式版本。
 
+## Branch Model / 分支模型
+
+- `main`: stable release branch.
+- `develop`: integration branch for the next minor release.
+- `feature/<name>`: feature work branched from `develop`.
+- `release/<minor>`: release stabilization branch, such as `release/0.11`.
+- `hotfix/<version>`: urgent patch branch from `main`, merged back to both
+  `main` and `develop`.
+
+- `main`：稳定发布分支。
+- `develop`：下一个小版本的集成分支。
+- `feature/<name>`：从 `develop` 创建的功能开发分支。
+- `release/<minor>`：版本稳定分支，例如 `release/0.11`。
+- `hotfix/<version>`：从 `main` 创建的紧急补丁分支，并合回 `main` 与
+  `develop`。
+
 ## Pre-release Checklist / 发布前检查清单
 
 1. Update `pyproject.toml` and `src/redqueue/_version.py`.

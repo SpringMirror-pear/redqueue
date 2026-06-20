@@ -16,6 +16,7 @@ from redqueue.compat import (
     detect_capabilities_async,
 )
 from redqueue.config import BackendType, QueueConfig
+from redqueue.connection import AsyncRedisConnectionManager
 from redqueue.message import Message
 from redqueue.monitoring import MonitoringEvent, MonitoringEventType
 
@@ -42,6 +43,7 @@ class AsyncQueueClient:
         *,
         redis: Any | None = None,
         capabilities: RedisCapabilities | None = None,
+        owns_redis: bool = True,
     ) -> None:
         """Initialize an async client container.
 
@@ -50,11 +52,13 @@ class AsyncQueueClient:
             redis: Async Redis client. Required before any backend operation.
             capabilities: Optional Redis capability set. ``from_url`` detects
                 this automatically.
+            owns_redis: When true, ``close`` closes the async Redis client.
         """
 
         self.config = config
         self.redis = redis
         self.capabilities = capabilities
+        self._owns_redis = owns_redis
         self.backend: AsyncListBackend | AsyncStreamBackend | None = None
         self.delay_backend: AsyncDelayBackend | None = None
         self.config.monitoring.emit(
@@ -72,6 +76,7 @@ class AsyncQueueClient:
         *,
         queue: str,
         backend: str | BackendType = BackendType.LIST,
+        connection_manager: AsyncRedisConnectionManager | None = None,
         **options: Any,
     ) -> AsyncQueueClient:
         """Create and initialize an async client from a Redis URL.
@@ -80,8 +85,10 @@ class AsyncQueueClient:
             url: Redis connection URL accepted by ``redis.asyncio.Redis``.
             queue: Logical RedQueue queue name.
             backend: Backend name or ``BackendType`` value.
+            connection_manager: Optional async connection manager used to create
+                a client from a shared pool.
             **options: Additional ``QueueConfig`` options. Tests may also pass
-                ``redis`` or ``capabilities``.
+                ``redis``, ``capabilities``, or ``pool_options``.
 
         Returns:
             An initialized ``AsyncQueueClient`` with its primary backend ready.
@@ -92,13 +99,26 @@ class AsyncQueueClient:
             QueueConfigError: If configuration values are invalid.
         """
 
-        redis = options.pop("redis", None) or Redis.from_url(url)
+        redis = options.pop("redis", None)
+        pool_options = options.pop("pool_options", None) or {}
+        owns_redis = False
+        if redis is None:
+            if connection_manager is not None:
+                redis = connection_manager.redis()
+            else:
+                redis = Redis.from_url(url, **pool_options)
+                owns_redis = True
         capabilities = options.pop(
             "capabilities",
             None,
         ) or await detect_capabilities_async(cast(AsyncRedisInfoClient, redis))
         config = QueueConfig(queue=queue, backend=backend, **options)
-        client = cls(config=config, redis=redis, capabilities=capabilities)
+        client = cls(
+            config=config,
+            redis=redis,
+            capabilities=capabilities,
+            owns_redis=owns_redis,
+        )
         await client._ensure_backend()
         return client
 
@@ -280,7 +300,10 @@ class AsyncQueueClient:
         await (await self._ensure_backend()).requeue_dead(message)
 
     async def close(self) -> None:
-        """Close the underlying async Redis client if it exposes close methods."""
+        """Close the async Redis client when this client owns it."""
+
+        if not self._owns_redis:
+            return
 
         close = getattr(self.redis, "aclose", None) or getattr(
             self.redis,
@@ -291,6 +314,21 @@ class AsyncQueueClient:
             result = close()
             if hasattr(result, "__await__"):
                 await result
+
+    async def __aenter__(self) -> AsyncQueueClient:
+        """Enter an asynchronous resource-management context."""
+
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> None:
+        """Close owned async resources when leaving an async context manager."""
+
+        await self.close()
 
     async def _ensure_backend(self) -> AsyncListBackend | AsyncStreamBackend:
         """Return the initialized primary backend, creating it when needed.

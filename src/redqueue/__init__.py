@@ -14,6 +14,7 @@ from redqueue.compat import (
     extract_redis_version,
 )
 from redqueue.config import BackendType, QueueConfig, RetryConfig
+from redqueue.connection import AsyncRedisConnectionManager, RedisConnectionManager
 from redqueue.exceptions import (
     AckError,
     BackendUnavailableError,
@@ -40,6 +41,7 @@ from redqueue.serialization import JsonSerializer, Serializer
 __all__ = [
     "__version__",
     "AckError",
+    "AsyncRedisConnectionManager",
     "AsyncQueueClient",
     "BackendType",
     "BackendUnavailableError",
@@ -58,6 +60,7 @@ __all__ = [
     "QueueConfig",
     "QueueConfigError",
     "RedisCapabilities",
+    "RedisConnectionManager",
     "RedQueueError",
     "RedisCompatibilityError",
     "RedisVersion",

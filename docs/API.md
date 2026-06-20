@@ -1,8 +1,8 @@
 # RedQueue API / RedQueue API 文档
 
-This document describes the public API available in RedQueue `0.10.1`.
+This document describes the public API available in RedQueue `0.11.0`.
 
-本文档描述 RedQueue `0.10.1` 的公开 API。
+本文档描述 RedQueue `0.11.0` 的公开 API。
 
 ## Clients / 客户端
 
@@ -24,7 +24,7 @@ client = QueueClient.from_url(
 
 Methods / 方法：
 
-- `from_url(url, *, queue, backend="list", **options) -> QueueClient`
+- `from_url(url, *, queue, backend="list", connection_manager=None, **options) -> QueueClient`
 - `publish(payload, *, delay=None, headers=None, message_id=None) -> str`
 - `consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `ack(message) -> None`
@@ -36,6 +36,7 @@ Methods / 方法：
 - `dead_letters(*, limit=100) -> list[Message]`
 - `requeue_dead(message) -> None`
 - `close() -> None`
+- `with QueueClient.from_url(...): ...`
 
 ### `AsyncQueueClient`
 
@@ -55,7 +56,7 @@ client = await AsyncQueueClient.from_url(
 
 Methods / 方法：
 
-- `await from_url(url, *, queue, backend="list", **options) -> AsyncQueueClient`
+- `await from_url(url, *, queue, backend="list", connection_manager=None, **options) -> AsyncQueueClient`
 - `await publish(payload, *, delay=None, headers=None, message_id=None) -> str`
 - `await consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `await ack(message) -> None`
@@ -67,6 +68,67 @@ Methods / 方法：
 - `await dead_letters(*, limit=100) -> list[Message]`
 - `await requeue_dead(message) -> None`
 - `await close() -> None`
+- `async with await AsyncQueueClient.from_url(...): ...`
+
+## Connection Management / 连接管理
+
+### `RedisConnectionManager`
+
+Synchronous Redis connection pool owner.
+
+同步 Redis 连接池所有者。
+
+```python
+from redqueue import QueueClient, RedisConnectionManager
+
+with RedisConnectionManager(
+    "redis://127.0.0.1:6379/0",
+    max_connections=20,
+) as manager:
+    client = QueueClient.from_url(
+        manager.url,
+        queue="emails",
+        connection_manager=manager,
+    )
+```
+
+Methods / 方法：
+
+- `redis() -> redis.Redis`
+- `close() -> None`
+- `with RedisConnectionManager(...): ...`
+
+### `AsyncRedisConnectionManager`
+
+Asynchronous Redis connection pool owner.
+
+异步 Redis 连接池所有者。
+
+```python
+from redqueue import AsyncQueueClient, AsyncRedisConnectionManager
+
+async with AsyncRedisConnectionManager(
+    "redis://127.0.0.1:6379/0",
+    max_connections=20,
+) as manager:
+    client = await AsyncQueueClient.from_url(
+        manager.url,
+        queue="jobs",
+        connection_manager=manager,
+    )
+```
+
+Methods / 方法：
+
+- `redis() -> redis.asyncio.Redis`
+- `await close() -> None`
+- `async with AsyncRedisConnectionManager(...): ...`
+
+Clients created from a connection manager do not close the shared pool when the
+client is closed. Close the manager to release shared connections.
+
+通过连接管理器创建的客户端在关闭时不会关闭共享连接池。需要释放共享连接时，
+请关闭连接管理器。
 
 ## Configuration / 配置
 
@@ -129,11 +191,12 @@ Fields / 字段：
 - `available_at: float | None`
 - `backend: str | None`
 - `raw_id: str | None`
+- `raw_payload: bytes | None`
 
 Helpers / 辅助方法：
 
 - `with_attempt() -> Message`
-- `with_backend(backend, *, raw_id=None) -> Message`
+- `with_backend(backend, *, raw_id=None, raw_payload=None) -> Message`
 - `new_message_id() -> str`
 
 ## Backends / 后端

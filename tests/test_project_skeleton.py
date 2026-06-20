@@ -10,6 +10,7 @@ import unittest
 from redqueue import (
     AckError,
     AsyncQueueClient,
+    AsyncRedisConnectionManager,
     BackendType,
     BackendUnavailableError,
     CompositeMonitoringHook,
@@ -26,6 +27,7 @@ from redqueue import (
     QueueConfigError,
     RedisCapabilities,
     RedisCompatibilityError,
+    RedisConnectionManager,
     RedisVersion,
     RedQueueError,
     RetryConfig,
@@ -48,7 +50,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.10.1")
+        self.assertEqual(__version__, "0.11.0")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -576,6 +578,167 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertTrue(message_id)
         self.assertIn("aclose", redis.commands)
+
+    def test_sync_client_can_leave_injected_redis_open(self) -> None:
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(queue="emails"),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            owns_redis=False,
+        )
+
+        client.close()
+
+        self.assertNotIn("close", redis.commands)
+
+    def test_sync_client_context_closes_owned_redis(self) -> None:
+        redis = FakeListRedis()
+
+        with QueueClient(
+            QueueConfig(queue="emails"),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        ):
+            pass
+
+        self.assertIn("close", redis.commands)
+
+    def test_async_client_can_leave_injected_redis_open(self) -> None:
+        async def run() -> FakeAsyncListRedis:
+            redis = FakeAsyncListRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="jobs"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+                owns_redis=False,
+            )
+            await client.close()
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertNotIn("aclose", redis.commands)
+
+    def test_async_client_context_closes_owned_redis(self) -> None:
+        async def run() -> FakeAsyncListRedis:
+            redis = FakeAsyncListRedis()
+            async with AsyncQueueClient(
+                QueueConfig(queue="jobs"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            ):
+                pass
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertIn("aclose", redis.commands)
+
+    def test_connection_managers_create_pooled_clients(self) -> None:
+        manager = RedisConnectionManager(
+            "redis://127.0.0.1:6379/0",
+            max_connections=3,
+        )
+
+        try:
+            first = manager.redis()
+            second = manager.redis()
+
+            self.assertIs(first.connection_pool, manager.pool)
+            self.assertIs(second.connection_pool, manager.pool)
+        finally:
+            manager.close()
+
+        with self.assertRaises(RuntimeError):
+            manager.redis()
+
+    def test_sync_from_url_accepts_connection_manager_and_pool_options(self) -> None:
+        redis = FakeListRedis()
+        client = QueueClient.from_url(
+            "redis://127.0.0.1:6379/0",
+            queue="emails",
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            pool_options={"max_connections": 3},
+        )
+
+        client.close()
+
+        self.assertNotIn("close", redis.commands)
+
+        manager = RedisConnectionManager(
+            "redis://127.0.0.1:6379/0",
+            max_connections=3,
+        )
+        try:
+            managed_client = QueueClient.from_url(
+                manager.url,
+                queue="emails",
+                connection_manager=manager,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+
+            self.assertIs(managed_client.redis.connection_pool, manager.pool)
+            managed_client.close()
+            self.assertIs(manager.redis().connection_pool, manager.pool)
+        finally:
+            manager.close()
+
+    def test_async_connection_manager_creates_pooled_clients(self) -> None:
+        async def run() -> None:
+            manager = AsyncRedisConnectionManager(
+                "redis://127.0.0.1:6379/0",
+                max_connections=3,
+            )
+            try:
+                first = manager.redis()
+                second = manager.redis()
+
+                self.assertIs(first.connection_pool, manager.pool)
+                self.assertIs(second.connection_pool, manager.pool)
+            finally:
+                await manager.close()
+
+            with self.assertRaises(RuntimeError):
+                manager.redis()
+
+        asyncio.run(run())
+
+    def test_async_from_url_accepts_connection_manager_and_pool_options(self) -> None:
+        async def run() -> None:
+            redis = FakeAsyncListRedis()
+            client = await AsyncQueueClient.from_url(
+                "redis://127.0.0.1:6379/0",
+                queue="jobs",
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+                pool_options={"max_connections": 3},
+            )
+
+            await client.close()
+
+            self.assertNotIn("aclose", redis.commands)
+
+            manager = AsyncRedisConnectionManager(
+                "redis://127.0.0.1:6379/0",
+                max_connections=3,
+            )
+            try:
+                managed_client = await AsyncQueueClient.from_url(
+                    manager.url,
+                    queue="jobs",
+                    connection_manager=manager,
+                    capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+                )
+
+                self.assertIs(managed_client.redis.connection_pool, manager.pool)
+                await managed_client.close()
+                self.assertIs(manager.redis().connection_pool, manager.pool)
+            finally:
+                await manager.close()
+
+        asyncio.run(run())
 
     def test_async_list_backend_ack_uses_original_serialized_payload(self) -> None:
         class NonDeterministicSerializer:

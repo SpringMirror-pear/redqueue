@@ -7,6 +7,43 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.11.0] - 2026-06-21
+
+### Added
+
+- Added synchronous `RedisConnectionManager` and asynchronous
+  `AsyncRedisConnectionManager` for shared Redis connection pool ownership.
+- Added client context manager support for explicit sync and async resource
+  cleanup.
+- Added `connection_manager` and `pool_options` support to sync and async
+  `from_url` constructors.
+- Added `README-zh-CN.md` and converted `README.md` to English-only content.
+- Added `CONTRIBUTING.md` with the project branch model and contribution
+  workflow.
+- Added `CODE_OF_CONDUCT.md`.
+
+### Changed
+
+- Updated formal release version to `0.11.0`.
+- Documented the branch model: `main`, `develop`, `feature/*`, `release/*`,
+  and `hotfix/*`.
+
+### 新增
+
+- 新增同步 `RedisConnectionManager` 和异步 `AsyncRedisConnectionManager`，
+  用于共享 Redis 连接池所有权管理。
+- 新增客户端上下文管理器支持，用于显式释放同步和异步资源。
+- 同步和异步 `from_url` 构造器新增 `connection_manager` 和 `pool_options`
+  支持。
+- 新增 `README-zh-CN.md`，并将 `README.md` 调整为纯英文文档。
+- 新增 `CONTRIBUTING.md`，记录项目分支模型和贡献流程。
+- 新增 `CODE_OF_CONDUCT.md`。
+
+### 变更
+
+- 正式版本更新为 `0.11.0`。
+- 记录分支模型：`main`、`develop`、`feature/*`、`release/*` 和 `hotfix/*`。
+
 ## [0.10.1] - 2026-06-20
 
 ### Fixed
