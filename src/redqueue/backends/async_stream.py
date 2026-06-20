@@ -261,7 +261,7 @@ class AsyncStreamBackend(BaseMessageBackend):
                 message_ids,
             )
             return [
-                self._decode_stream_entry(str(raw_id), fields)
+                self._decode_stream_entry(raw_id, fields)
                 for raw_id, fields in claimed
             ]
         response = await self._execute(
@@ -310,7 +310,10 @@ class AsyncStreamBackend(BaseMessageBackend):
             self.stream_key,
             {"payload": self._encode(message)},
         )
-        published = message.with_backend(self.backend_name, raw_id=str(raw_id))
+        published = message.with_backend(
+            self.backend_name,
+            raw_id=self._to_text(raw_id),
+        )
         self._emit(
             MonitoringEventType.MESSAGE_PUBLISHED,
             published,
@@ -349,7 +352,7 @@ class AsyncStreamBackend(BaseMessageBackend):
         messages: list[Message] = []
         for _stream, entries in response or []:
             for raw_id, fields in entries:
-                messages.append(self._decode_stream_entry(str(raw_id), fields))
+                messages.append(self._decode_stream_entry(raw_id, fields))
         return messages
 
     def _parse_autoclaim_response(self, response: Any) -> list[Message]:
@@ -357,20 +360,23 @@ class AsyncStreamBackend(BaseMessageBackend):
             return []
         entries = response[1] if len(response) > 1 else []
         return [
-            self._decode_stream_entry(str(raw_id), fields)
+            self._decode_stream_entry(raw_id, fields)
             for raw_id, fields in entries
         ]
 
-    def _decode_stream_entry(self, raw_id: str, fields: dict[Any, Any]) -> Message:
+    def _decode_stream_entry(self, raw_id: Any, fields: dict[Any, Any]) -> Message:
         payload = fields.get("payload") or fields.get(b"payload")
         if payload is None:
             raise BackendUnavailableError(
                 "stream entry is missing payload field",
                 action="message.decode",
                 queue=self.config.queue,
-                details={"raw_id": raw_id},
+                details={"raw_id": self._to_text(raw_id)},
             )
-        return self._decode(payload).with_backend(self.backend_name, raw_id=raw_id)
+        return self._decode(payload).with_backend(
+            self.backend_name,
+            raw_id=self._to_text(raw_id),
+        )
 
     def _consumer_name(self) -> str:
         return self.config.consumer_name or "redqueue-consumer"
@@ -379,8 +385,13 @@ class AsyncStreamBackend(BaseMessageBackend):
     def _pending_id(item: Any) -> str:
         if isinstance(item, dict):
             value = item.get("message_id") or item.get("message-id") or item.get("id")
-            return str(value)
-        return str(item[0])
+            return value.decode() if isinstance(value, bytes) else str(value)
+        value = item[0]
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+    @staticmethod
+    def _to_text(value: Any) -> str:
+        return value.decode() if isinstance(value, bytes) else str(value)
 
     async def _execute(self, action: str, func: Any, *args: Any) -> Any:
         try:

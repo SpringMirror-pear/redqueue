@@ -236,14 +236,35 @@ released = client.schedule_due(limit=100)
 ## Documentation / 文档
 
 - API: [docs/API.md](docs/API.md)
+- Examples: [examples/README.md](examples/README.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Release process: [docs/RELEASE.md](docs/RELEASE.md)
 - Test guide: [tests/README.md](tests/README.md)
 
 - API 文档：[docs/API.md](docs/API.md)
+- 示例代码：[examples/README.md](examples/README.md)
 - 版本变更记录：[CHANGELOG.md](CHANGELOG.md)
 - 发布流程：[docs/RELEASE.md](docs/RELEASE.md)
 - 测试指南：[tests/README.md](tests/README.md)
+
+## Examples / 示例
+
+The `examples/` directory contains runnable scripts for synchronous List queues,
+asynchronous List queues, Streams, delayed tasks, monitoring hooks, custom
+serializers, and Redis compatibility checks.
+
+`examples/` 目录包含可运行脚本，覆盖同步 List 队列、异步 List 队列、Streams、
+延迟任务、监控 hook、自定义序列化器和 Redis 兼容性检查。
+
+```bash
+PYTHONPATH=src python examples/sync_list_queue.py
+PYTHONPATH=src python examples/async_list_queue.py
+PYTHONPATH=src python examples/stream_queue.py
+PYTHONPATH=src python examples/delayed_tasks.py
+PYTHONPATH=src python examples/monitoring_hooks.py
+PYTHONPATH=src python examples/custom_serializer.py
+PYTHONPATH=src python examples/compatibility_check.py
+```
 
 ## Testing / 测试
 

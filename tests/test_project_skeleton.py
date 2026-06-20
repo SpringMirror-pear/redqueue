@@ -732,6 +732,22 @@ class ProjectSkeletonTests(unittest.TestCase):
             message.id,
         )
 
+    def test_stream_backend_normalizes_bytes_stream_ids(self) -> None:
+        redis = FakeStreamRedis()
+        client = QueueClient(
+            QueueConfig(queue="events", backend="stream"),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(5, 0, 0)),
+        )
+
+        client.publish({"event": "created"})
+        message = client.consume(timeout=1)
+        recovered = client.backend.recover_pending(min_idle_ms=1, limit=10)
+
+        self.assertIsInstance(message.raw_id, str)
+        self.assertIsInstance(recovered[0].raw_id, str)
+        client.ack(recovered[0])
+
     def test_async_list_backend_dead_letter_requeue(self) -> None:
         async def run() -> str:
             redis = FakeAsyncListRedis()
