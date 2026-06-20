@@ -7,6 +7,23 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.11.1] - 2026-06-21
+
+### Fixed
+
+- Fixed resource cleanup in sync and async `from_url()` when Redis capability
+  detection, configuration validation, or backend initialization fails after the
+  client created an owned Redis connection.
+- Added explicit `owns_redis` override support to sync and async `from_url()`
+  for advanced ownership control.
+
+### 修复
+
+- 修复同步和异步 `from_url()` 在自动创建 Redis 连接后，如果 Redis 能力探测、
+  配置校验或后端初始化失败，已创建连接未释放的问题。
+- 同步和异步 `from_url()` 新增显式 `owns_redis` 覆盖支持，用于高级资源所有权
+  控制。
+
 ## [0.11.0] - 2026-06-21
 
 ### Added

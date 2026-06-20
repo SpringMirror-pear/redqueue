@@ -50,7 +50,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.11.0")
+        self.assertEqual(__version__, "0.11.1")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -685,6 +685,56 @@ class ProjectSkeletonTests(unittest.TestCase):
         finally:
             manager.close()
 
+    def test_sync_from_url_closes_owned_redis_when_initialization_fails(self) -> None:
+        class OwnedRedis(FakeListRedis):
+            def info(self, section: str | None = None) -> dict[str, str]:
+                return {"redis_version": "7.0.0"}
+
+        redis = OwnedRedis()
+
+        with self.assertRaises(QueueConfigError):
+            QueueClient.from_url(
+                "redis://127.0.0.1:6379/0",
+                queue="bad queue",
+                redis=redis,
+                owns_redis=True,
+            )
+
+        self.assertIn("close", redis.commands)
+
+    def test_sync_from_url_leaves_injected_redis_open_when_init_fails(self) -> None:
+        class InjectedRedis(FakeListRedis):
+            def info(self, section: str | None = None) -> dict[str, str]:
+                return {"redis_version": "7.0.0"}
+
+        redis = InjectedRedis()
+
+        with self.assertRaises(QueueConfigError):
+            QueueClient.from_url(
+                "redis://127.0.0.1:6379/0",
+                queue="bad queue",
+                redis=redis,
+            )
+
+        self.assertNotIn("close", redis.commands)
+
+    def test_sync_from_url_closes_owned_redis_when_capability_probe_fails(self) -> None:
+        class BrokenInfoRedis(FakeListRedis):
+            def info(self, section: str | None = None) -> dict[str, str]:
+                raise TimeoutError("redis unavailable")
+
+        redis = BrokenInfoRedis()
+
+        with self.assertRaises(BackendUnavailableError):
+            QueueClient.from_url(
+                "redis://127.0.0.1:6379/0",
+                queue="emails",
+                redis=redis,
+                owns_redis=True,
+            )
+
+        self.assertIn("close", redis.commands)
+
     def test_async_connection_manager_creates_pooled_clients(self) -> None:
         async def run() -> None:
             manager = AsyncRedisConnectionManager(
@@ -739,6 +789,65 @@ class ProjectSkeletonTests(unittest.TestCase):
                 await manager.close()
 
         asyncio.run(run())
+
+    def test_async_from_url_closes_owned_redis_when_initialization_fails(self) -> None:
+        class OwnedAsyncRedis(FakeAsyncListRedis):
+            async def info(self, section: str | None = None) -> dict[str, str]:
+                return {"redis_version": "7.0.0"}
+
+        async def run() -> FakeAsyncListRedis:
+            redis = OwnedAsyncRedis()
+            with self.assertRaises(QueueConfigError):
+                await AsyncQueueClient.from_url(
+                    "redis://127.0.0.1:6379/0",
+                    queue="bad queue",
+                    redis=redis,
+                    owns_redis=True,
+                )
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertIn("aclose", redis.commands)
+
+    def test_async_from_url_leaves_injected_redis_open_when_init_fails(self) -> None:
+        class InjectedAsyncRedis(FakeAsyncListRedis):
+            async def info(self, section: str | None = None) -> dict[str, str]:
+                return {"redis_version": "7.0.0"}
+
+        async def run() -> FakeAsyncListRedis:
+            redis = InjectedAsyncRedis()
+            with self.assertRaises(QueueConfigError):
+                await AsyncQueueClient.from_url(
+                    "redis://127.0.0.1:6379/0",
+                    queue="bad queue",
+                    redis=redis,
+                )
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertNotIn("aclose", redis.commands)
+
+    def test_async_from_url_closes_owned_redis_on_probe_failure(self) -> None:
+        class BrokenInfoAsyncRedis(FakeAsyncListRedis):
+            async def info(self, section: str | None = None) -> dict[str, str]:
+                raise TimeoutError("redis unavailable")
+
+        async def run() -> FakeAsyncListRedis:
+            redis = BrokenInfoAsyncRedis()
+            with self.assertRaises(BackendUnavailableError):
+                await AsyncQueueClient.from_url(
+                    "redis://127.0.0.1:6379/0",
+                    queue="jobs",
+                    redis=redis,
+                    owns_redis=True,
+                )
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertIn("aclose", redis.commands)
 
     def test_async_list_backend_ack_uses_original_serialized_payload(self) -> None:
         class NonDeterministicSerializer:

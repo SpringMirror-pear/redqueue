@@ -88,7 +88,8 @@ class AsyncQueueClient:
             connection_manager: Optional async connection manager used to create
                 a client from a shared pool.
             **options: Additional ``QueueConfig`` options. Tests may also pass
-                ``redis``, ``capabilities``, or ``pool_options``.
+                ``redis``, ``capabilities``, ``pool_options``, or
+                ``owns_redis``.
 
         Returns:
             An initialized ``AsyncQueueClient`` with its primary backend ready.
@@ -101,26 +102,48 @@ class AsyncQueueClient:
 
         redis = options.pop("redis", None)
         pool_options = options.pop("pool_options", None) or {}
-        owns_redis = False
+        explicit_owns_redis = options.pop("owns_redis", None)
+        owns_redis = (
+            bool(explicit_owns_redis)
+            if explicit_owns_redis is not None
+            else False
+        )
         if redis is None:
             if connection_manager is not None:
                 redis = connection_manager.redis()
             else:
                 redis = Redis.from_url(url, **pool_options)
-                owns_redis = True
-        capabilities = options.pop(
-            "capabilities",
-            None,
-        ) or await detect_capabilities_async(cast(AsyncRedisInfoClient, redis))
-        config = QueueConfig(queue=queue, backend=backend, **options)
-        client = cls(
-            config=config,
-            redis=redis,
-            capabilities=capabilities,
-            owns_redis=owns_redis,
-        )
-        await client._ensure_backend()
-        return client
+                owns_redis = (
+                    True
+                    if explicit_owns_redis is None
+                    else bool(explicit_owns_redis)
+                )
+        try:
+            capabilities = options.pop(
+                "capabilities",
+                None,
+            ) or await detect_capabilities_async(cast(AsyncRedisInfoClient, redis))
+            config = QueueConfig(queue=queue, backend=backend, **options)
+            client = cls(
+                config=config,
+                redis=redis,
+                capabilities=capabilities,
+                owns_redis=owns_redis,
+            )
+            await client._ensure_backend()
+            return client
+        except Exception:
+            if owns_redis:
+                close = getattr(redis, "aclose", None) or getattr(
+                    redis,
+                    "close",
+                    None,
+                )
+                if close is not None:
+                    result = close()
+                    if hasattr(result, "__await__"):
+                        await result
+            raise
 
     async def publish(
         self,

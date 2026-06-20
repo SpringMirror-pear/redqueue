@@ -1,8 +1,8 @@
 # RedQueue API / RedQueue API 文档
 
-This document describes the public API available in RedQueue `0.11.0`.
+This document describes the public API available in RedQueue `0.11.1`.
 
-本文档描述 RedQueue `0.11.0` 的公开 API。
+本文档描述 RedQueue `0.11.1` 的公开 API。
 
 ## Clients / 客户端
 
@@ -25,6 +25,8 @@ client = QueueClient.from_url(
 Methods / 方法：
 
 - `from_url(url, *, queue, backend="list", connection_manager=None, **options) -> QueueClient`
+  - Advanced options include `pool_options`, injected `redis`, injected
+    `capabilities`, and `owns_redis`.
 - `publish(payload, *, delay=None, headers=None, message_id=None) -> str`
 - `consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `ack(message) -> None`
@@ -57,6 +59,8 @@ client = await AsyncQueueClient.from_url(
 Methods / 方法：
 
 - `await from_url(url, *, queue, backend="list", connection_manager=None, **options) -> AsyncQueueClient`
+  - Advanced options include `pool_options`, injected `redis`, injected
+    `capabilities`, and `owns_redis`.
 - `await publish(payload, *, delay=None, headers=None, message_id=None) -> str`
 - `await consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `await ack(message) -> None`
