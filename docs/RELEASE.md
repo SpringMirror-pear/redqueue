@@ -27,6 +27,8 @@ This document describes how RedQueue releases are prepared and published.
 - `release/<minor>`: release stabilization branch, such as `release/0.11`.
 - `hotfix/<version>`: urgent patch branch from `main`, merged back to both
   `main` and `develop`.
+- After release stabilization, merge `release/<minor>` into `main`. The `main`
+  branch always represents the latest formal release.
 
 - `main`：稳定发布分支。
 - `develop`：下一个小版本的集成分支。
@@ -34,6 +36,8 @@ This document describes how RedQueue releases are prepared and published.
 - `release/<minor>`：版本稳定分支，例如 `release/0.11`。
 - `hotfix/<version>`：从 `main` 创建的紧急补丁分支，并合回 `main` 与
   `develop`。
+- 版本稳定后，将 `release/<minor>` 合并到 `main`。`main` 分支始终代表最新
+  正式版本。
 
 ## Pre-release Checklist / 发布前检查清单
 

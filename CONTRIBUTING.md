@@ -7,8 +7,8 @@ changes that preserve Redis compatibility and clear resource ownership.
 
 RedQueue uses a lightweight Git Flow model:
 
-- `main`: stable release branch. Release branches and urgent hotfixes merge
-  here.
+- `main`: stable release branch and the latest formal release. Release branches
+  and urgent hotfixes merge here.
 - `develop`: integration branch for the next minor release.
 - `feature/<name>`: feature branches created from `develop` and merged back to
   `develop`.
@@ -24,6 +24,8 @@ RedQueue uses a lightweight Git Flow model:
 4. Update documentation when public APIs or workflows change.
 5. Open a pull request into `develop` for regular work, or into the active
    `release/<minor>` branch for release stabilization fixes.
+6. After a release is stabilized, merge `release/<minor>` into `main`, tag the
+   release from `main`, and publish the package.
 
 ## Versioning
 
