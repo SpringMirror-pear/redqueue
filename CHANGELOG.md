@@ -7,6 +7,23 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.11.2] - 2026-06-21
+
+### Fixed
+
+- Fixed cleanup for directly constructed sync clients when owned Redis backend
+  initialization fails.
+- Fixed cleanup for directly constructed async clients when lazy backend
+  initialization fails.
+- Made sync and async client `close()` idempotent for owned Redis clients.
+
+### 修复
+
+- 修复直接构造同步客户端时，如果 owned Redis 的后端初始化失败，Redis client
+  未释放的问题。
+- 修复直接构造异步客户端时，如果懒加载后端初始化失败，Redis client 未释放的问题。
+- 同步和异步客户端的 `close()` 对 owned Redis client 变为幂等。
+
 ## [0.11.1] - 2026-06-21
 
 ### Fixed

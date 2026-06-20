@@ -59,6 +59,7 @@ class AsyncQueueClient:
         self.redis = redis
         self.capabilities = capabilities
         self._owns_redis = owns_redis
+        self._closed = False
         self.backend: AsyncListBackend | AsyncStreamBackend | None = None
         self.delay_backend: AsyncDelayBackend | None = None
         self.config.monitoring.emit(
@@ -118,32 +119,30 @@ class AsyncQueueClient:
                     if explicit_owns_redis is None
                     else bool(explicit_owns_redis)
                 )
+        capabilities = options.pop("capabilities", None)
+        if capabilities is None:
+            try:
+                capabilities = await detect_capabilities_async(
+                    cast(AsyncRedisInfoClient, redis)
+                )
+            except Exception:
+                if owns_redis:
+                    await cls._close_redis(redis)
+                raise
         try:
-            capabilities = options.pop(
-                "capabilities",
-                None,
-            ) or await detect_capabilities_async(cast(AsyncRedisInfoClient, redis))
             config = QueueConfig(queue=queue, backend=backend, **options)
-            client = cls(
-                config=config,
-                redis=redis,
-                capabilities=capabilities,
-                owns_redis=owns_redis,
-            )
-            await client._ensure_backend()
-            return client
         except Exception:
             if owns_redis:
-                close = getattr(redis, "aclose", None) or getattr(
-                    redis,
-                    "close",
-                    None,
-                )
-                if close is not None:
-                    result = close()
-                    if hasattr(result, "__await__"):
-                        await result
+                await cls._close_redis(redis)
             raise
+        client = cls(
+            config=config,
+            redis=redis,
+            capabilities=capabilities,
+            owns_redis=owns_redis,
+        )
+        await client._ensure_backend()
+        return client
 
     async def publish(
         self,
@@ -325,7 +324,7 @@ class AsyncQueueClient:
     async def close(self) -> None:
         """Close the async Redis client when this client owns it."""
 
-        if not self._owns_redis:
+        if self._closed or not self._owns_redis:
             return
 
         close = getattr(self.redis, "aclose", None) or getattr(
@@ -334,9 +333,8 @@ class AsyncQueueClient:
             None,
         )
         if close is not None:
-            result = close()
-            if hasattr(result, "__await__"):
-                await result
+            await self._call_close(close)
+        self._closed = True
 
     async def __aenter__(self) -> AsyncQueueClient:
         """Enter an asynchronous resource-management context."""
@@ -372,23 +370,47 @@ class AsyncQueueClient:
             capabilities = self.capabilities
             if capabilities is None:
                 raise TypeError("Redis capabilities are required before backend use")
-            self.backend = AsyncListBackend(self.redis, self.config, capabilities)
-            return self.backend
+            try:
+                self.backend = AsyncListBackend(self.redis, self.config, capabilities)
+                return self.backend
+            except Exception:
+                await self.close()
+                raise
         if self.config.backend_type is BackendType.STREAM:
             if self.redis is None:
                 raise TypeError("redis client is required for async Streams backend")
             capabilities = self.capabilities
             if capabilities is None:
                 raise TypeError("Redis capabilities are required before backend use")
-            self.backend = await AsyncStreamBackend.create(
-                self.redis,
-                self.config,
-                capabilities,
-            )
-            return self.backend
+            try:
+                self.backend = await AsyncStreamBackend.create(
+                    self.redis,
+                    self.config,
+                    capabilities,
+                )
+                return self.backend
+            except Exception:
+                await self.close()
+                raise
         raise NotImplementedError(
             f"backend {self.config.backend_type.value!r} is not implemented"
         )
+
+    @staticmethod
+    async def _close_redis(redis: Any) -> None:
+        """Close an async Redis-like object if it exposes a close method."""
+
+        close = getattr(redis, "aclose", None) or getattr(redis, "close", None)
+        if close is not None:
+            await AsyncQueueClient._call_close(close)
+
+    @staticmethod
+    async def _call_close(close: Any) -> None:
+        """Call a sync or async close method."""
+
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
 
     async def _ensure_delay_backend(self) -> AsyncDelayBackend:
         """Return the initialized async delay scheduler, creating it when needed."""

@@ -65,8 +65,13 @@ class QueueClient:
         self.redis = redis
         self.capabilities = capabilities
         self._owns_redis = owns_redis
-        self.backend = self._create_backend()
-        self.delay_backend = self._create_delay_backend()
+        self._closed = False
+        try:
+            self.backend = self._create_backend()
+            self.delay_backend = self._create_delay_backend()
+        except Exception:
+            self.close()
+            raise
         self.config.monitoring.emit(
             MonitoringEvent(
                 type=MonitoringEventType.CLIENT_CREATED,
@@ -125,23 +130,30 @@ class QueueClient:
                     if explicit_owns_redis is None
                     else bool(explicit_owns_redis)
                 )
+        capabilities = options.pop("capabilities", None)
+        if capabilities is None:
+            try:
+                capabilities = detect_capabilities(cast(RedisInfoClient, redis))
+            except Exception:
+                if owns_redis:
+                    close = getattr(redis, "close", None)
+                    if close is not None:
+                        close()
+                raise
         try:
-            capabilities = options.pop("capabilities", None) or detect_capabilities(
-                cast(RedisInfoClient, redis)
-            )
             config = QueueConfig(queue=queue, backend=backend, **options)
-            return cls(
-                config=config,
-                redis=redis,
-                capabilities=capabilities,
-                owns_redis=owns_redis,
-            )
         except Exception:
             if owns_redis:
                 close = getattr(redis, "close", None)
                 if close is not None:
                     close()
             raise
+        return cls(
+            config=config,
+            redis=redis,
+            capabilities=capabilities,
+            owns_redis=owns_redis,
+        )
 
     def publish(
         self,
@@ -324,12 +336,13 @@ class QueueClient:
     def close(self) -> None:
         """Close the Redis client when this client owns it."""
 
-        if not self._owns_redis:
+        if self._closed or not self._owns_redis:
             return
 
         close = getattr(self.redis, "close", None)
         if close is not None:
             close()
+        self._closed = True
 
     def __enter__(self) -> QueueClient:
         """Enter a synchronous resource-management context."""

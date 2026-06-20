@@ -50,7 +50,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.11.1")
+        self.assertEqual(__version__, "0.11.2")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -604,6 +604,35 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertIn("close", redis.commands)
 
+    def test_sync_client_close_is_idempotent(self) -> None:
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(queue="emails"),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        client.close()
+        client.close()
+
+        self.assertEqual(redis.commands.count("close"), 1)
+
+    def test_sync_client_closes_owned_redis_when_backend_init_fails(self) -> None:
+        class ClosableStreamRedis(FakeStreamRedis):
+            def close(self) -> None:
+                self.commands.append("close")
+
+        redis = ClosableStreamRedis()
+
+        with self.assertRaises(RedisCompatibilityError):
+            QueueClient(
+                QueueConfig(queue="events", backend="stream"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(4, 0, 14)),
+            )
+
+        self.assertIn("close", redis.commands)
+
     def test_async_client_can_leave_injected_redis_open(self) -> None:
         async def run() -> FakeAsyncListRedis:
             redis = FakeAsyncListRedis()
@@ -629,6 +658,42 @@ class ProjectSkeletonTests(unittest.TestCase):
                 capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
             ):
                 pass
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertIn("aclose", redis.commands)
+
+    def test_async_client_close_is_idempotent(self) -> None:
+        async def run() -> FakeAsyncListRedis:
+            redis = FakeAsyncListRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="jobs"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            await client.close()
+            await client.close()
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertEqual(redis.commands.count("aclose"), 1)
+
+    def test_async_client_closes_owned_redis_when_backend_init_fails(self) -> None:
+        async def run() -> FakeAsyncStreamRedis:
+            class ClosableAsyncStreamRedis(FakeAsyncStreamRedis):
+                async def aclose(self) -> None:
+                    self.commands.append("aclose")
+
+            redis = ClosableAsyncStreamRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="events", backend="stream"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(4, 0, 14)),
+            )
+            with self.assertRaises(RedisCompatibilityError):
+                await client.consume(timeout=1)
             return redis
 
         redis = asyncio.run(run())

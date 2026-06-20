@@ -1,8 +1,8 @@
 # RedQueue API / RedQueue API 文档
 
-This document describes the public API available in RedQueue `0.11.1`.
+This document describes the public API available in RedQueue `0.11.2`.
 
-本文档描述 RedQueue `0.11.1` 的公开 API。
+本文档描述 RedQueue `0.11.2` 的公开 API。
 
 ## Clients / 客户端
 
