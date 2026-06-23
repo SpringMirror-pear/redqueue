@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from math import ceil
 from typing import Any, Protocol
 
 from redqueue.backends.base import BaseListBackend
@@ -410,8 +411,28 @@ class AsyncListBackend(BaseListBackend):
             self.redis.brpoplpush,
             self.ready_key,
             self.processing_key,
-            timeout,
+            self._legacy_blocking_timeout(timeout),
         )
+
+    @staticmethod
+    def _legacy_blocking_timeout(timeout: float) -> int:
+        """Normalize ``BRPOPLPUSH`` timeout for older Redis servers.
+
+        Redis versions that do not support ``BLMOVE`` can be strict about
+        ``BRPOPLPUSH`` timeout being an integer number of seconds. Positive
+        fractional values are rounded up so they do not become an indefinite
+        block.
+
+        Args:
+            timeout: User-facing timeout in seconds.
+
+        Returns:
+            Integer timeout accepted by legacy Redis List commands.
+        """
+
+        if timeout <= 0:
+            return 0
+        return max(1, ceil(timeout))
 
     async def _execute(self, action: str, func: Any, *args: Any) -> Any:
         """Execute an async Redis command and wrap failures consistently.

@@ -50,7 +50,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.11.2")
+        self.assertEqual(__version__, "0.12.0")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -470,6 +470,19 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertIsInstance(message, Message)
         self.assertIn("brpoplpush", redis.commands)
+
+    def test_sync_list_backend_normalizes_legacy_timeout(self) -> None:
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(queue="emails"),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(5, 0, 0)),
+        )
+
+        client.publish({"to": "user@example.com"})
+        client.consume(timeout=0.25)
+
+        self.assertEqual(redis.timeouts[-1], 1)
 
     def test_sync_list_backend_nack_requeues_or_dead_letters(self) -> None:
         redis = FakeListRedis()
@@ -966,6 +979,22 @@ class ProjectSkeletonTests(unittest.TestCase):
         redis = asyncio.run(run())
 
         self.assertIn("brpoplpush", redis.commands)
+
+    def test_async_list_backend_normalizes_legacy_timeout(self) -> None:
+        async def run() -> FakeAsyncListRedis:
+            redis = FakeAsyncListRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="jobs"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(5, 0, 0)),
+            )
+            await client.publish({"task": "sync"})
+            await client.consume(timeout=0.25)
+            return redis
+
+        redis = asyncio.run(run())
+
+        self.assertEqual(redis.timeouts[-1], 1)
 
     def test_async_list_backend_retry_dead_letters(self) -> None:
         async def run() -> FakeAsyncListRedis:

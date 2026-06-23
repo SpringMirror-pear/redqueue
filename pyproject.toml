@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "redqueue"
-version = "0.11.2"
+version = "0.12.0"
 description = "Redis-backed Python message queue library with List, Streams, delayed tasks, and monitoring."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -37,6 +37,9 @@ dependencies = [
 Homepage = "https://github.com/SpringMirror-pear/redqueue"
 Repository = "https://github.com/SpringMirror-pear/redqueue.git"
 Issues = "https://github.com/SpringMirror-pear/redqueue/issues"
+
+[project.scripts]
+redqueue = "redqueue.cli:main"
 
 [project.optional-dependencies]
 dev = [

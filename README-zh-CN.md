@@ -16,6 +16,7 @@ https://github.com/SpringMirror-pear/redqueue.git
 - 基于 Redis Sorted Set 的延迟任务。
 - 同步客户端 `QueueClient` 与异步客户端 `AsyncQueueClient`。
 - 支持同步和异步 Redis 连接池管理器，方便多个客户端共享连接池。
+- 提供 `redqueue` CLI，用于本地调试和运行时检查。
 - 带结构化上下文的统一异常体系。
 - 针对发布、消费、确认、拒绝、重试、死信、延迟和后端错误的监控事件。
 - 通过 `INFO server` 探测 Redis 能力。
@@ -45,11 +46,50 @@ Redis：
 pip install redqueue
 ```
 
+安装后会提供 `redqueue` 命令。从源码目录调试时也可以使用
+`python -m redqueue`。
+
 本地开发：
 
 ```bash
 python -m pip install -r requirements.txt
 ```
+
+## CLI
+
+检查 Redis 兼容性：
+
+```bash
+redqueue check --url redis://127.0.0.1:6379/0
+```
+
+查看队列统计：
+
+```bash
+redqueue stats --url redis://127.0.0.1:6379/0 --queue emails
+```
+
+发布和消费消息：
+
+```bash
+redqueue publish --queue emails --payload '{"to":"user@example.com"}'
+redqueue consume --queue emails --timeout 1 --ack
+```
+
+调试延迟任务：
+
+```bash
+redqueue delay --queue emails --payload '{"to":"later@example.com"}' --delay-seconds 60
+redqueue schedule-due --queue emails --limit 100
+```
+
+查看死信：
+
+```bash
+redqueue dead-letters --queue emails --limit 20
+```
+
+所有命令都输出 JSON，方便接入脚本和日志处理流程。
 
 ## 快速开始
 

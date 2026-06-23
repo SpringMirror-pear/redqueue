@@ -1,8 +1,8 @@
 # RedQueue API / RedQueue API 文档
 
-This document describes the public API available in RedQueue `0.11.2`.
+This document describes the public API available in RedQueue `0.12.0`.
 
-本文档描述 RedQueue `0.11.2` 的公开 API。
+本文档描述 RedQueue `0.12.0` 的公开 API。
 
 ## Clients / 客户端
 
@@ -314,3 +314,34 @@ Monitoring events do not include business payload by default.
 Streams are rejected with `RedisCompatibilityError` when Redis is below `5.0`.
 
 当 Redis 低于 `5.0` 时，启用 Streams 会抛出 `RedisCompatibilityError`。
+
+## CLI / 命令行工具
+
+RedQueue `0.12.0` provides a `redqueue` console command and a
+`python -m redqueue` module entry point for developer diagnostics.
+
+RedQueue `0.12.0` 提供 `redqueue` 控制台命令和 `python -m redqueue`
+模块入口，用于开发者调试。
+
+Commands / 命令：
+
+- `redqueue check --url redis://127.0.0.1:6379/0`
+- `redqueue stats --queue emails [--backend list|stream]`
+- `redqueue publish --queue emails --payload '{"to":"user@example.com"}'`
+- `redqueue consume --queue emails [--ack|--nack|--retry]`
+- `redqueue delay --queue emails --payload '{"to":"later@example.com"}' --delay-seconds 60`
+- `redqueue schedule-due --queue emails --limit 100`
+- `redqueue dead-letters --queue emails --limit 20`
+
+Common options / 通用选项：
+
+- `--url`: Redis URL. Defaults to `redis://127.0.0.1:6379/0`.
+- `--queue`: RedQueue queue name.
+- `--backend`: `list` or `stream`.
+- `--namespace`: Redis key namespace. Defaults to `rq`.
+- `--consumer-group`: Streams consumer group. Defaults to `redqueue`.
+- `--consumer-name`: Optional Streams consumer name.
+
+Payload and headers are JSON strings. Command responses are stable JSON objects.
+
+Payload 和 headers 使用 JSON 字符串。命令响应为稳定 JSON 对象。

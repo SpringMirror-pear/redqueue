@@ -7,6 +7,36 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.12.0] - 2026-06-23
+
+### Added
+
+- Added the `redqueue` CLI and `python -m redqueue` module entry point for
+  developer debugging.
+- Added CLI commands for Redis compatibility checks, queue statistics, message
+  publish, consume with optional ack/nack/retry, delayed scheduling, due
+  release, and dead-letter inspection.
+- Added deterministic JSON CLI output and user-facing JSON validation errors.
+- Added CLI unit tests with injected fake Redis and queue clients.
+
+### Fixed
+
+- Normalized `BRPOPLPUSH` timeout values to integer seconds for Redis versions
+  older than 6.2, improving Redis 5.x List consume compatibility.
+
+### 新增
+
+- 新增 `redqueue` CLI 和 `python -m redqueue` 模块入口，方便开发者调试。
+- 新增 Redis 兼容性检查、队列统计、消息发布、消费并可选 ack/nack/retry、
+  延迟调度、到期释放和死信查看命令。
+- CLI 输出稳定 JSON，并提供面向用户的 JSON 参数校验错误。
+- 新增基于 fake Redis 和 fake queue client 的 CLI 单元测试。
+
+### 修复
+
+- 对 Redis 6.2 以下版本使用 `BRPOPLPUSH` 时，将 timeout 规范为整数秒，
+  提升 Redis 5.x List 消费兼容性。
+
 ## [0.11.2] - 2026-06-21
 
 ### Fixed

@@ -10,6 +10,7 @@ class FakeListRedis:
         self.values: dict[str, bytes] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
         self.commands: list[str] = []
+        self.timeouts: list[float | int] = []
 
     def lpush(self, name: str, *values: bytes) -> int:
         self.commands.append("lpush")
@@ -27,6 +28,7 @@ class FakeListRedis:
         dest: str = "LEFT",
     ) -> bytes | None:
         self.commands.append("blmove")
+        self.timeouts.append(timeout)
         source = self.lists.setdefault(first_list, [])
         if not source:
             return None
@@ -40,6 +42,7 @@ class FakeListRedis:
 
     def brpoplpush(self, src: str, dst: str, timeout: float) -> bytes | None:
         self.commands.append("brpoplpush")
+        self.timeouts.append(timeout)
         source = self.lists.setdefault(src, [])
         if not source:
             return None

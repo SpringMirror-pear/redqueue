@@ -17,6 +17,7 @@ https://github.com/SpringMirror-pear/redqueue.git
 - Delayed tasks based on Redis Sorted Set.
 - Sync client `QueueClient` and async client `AsyncQueueClient`.
 - Redis connection pool managers for shared sync and async resources.
+- `redqueue` CLI for local debugging and operational checks.
 - Unified exception hierarchy with structured context.
 - Monitoring events for publish, consume, ack, nack, retry, dead letter, delay,
   and backend errors.
@@ -47,11 +48,50 @@ Redis:
 pip install redqueue
 ```
 
+The package installs a `redqueue` command. You can also run it with
+`python -m redqueue` from a source checkout.
+
 For local development:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
+
+## CLI
+
+Check Redis compatibility:
+
+```bash
+redqueue check --url redis://127.0.0.1:6379/0
+```
+
+Inspect queue counts:
+
+```bash
+redqueue stats --url redis://127.0.0.1:6379/0 --queue emails
+```
+
+Publish and consume messages:
+
+```bash
+redqueue publish --queue emails --payload '{"to":"user@example.com"}'
+redqueue consume --queue emails --timeout 1 --ack
+```
+
+Delayed task debugging:
+
+```bash
+redqueue delay --queue emails --payload '{"to":"later@example.com"}' --delay-seconds 60
+redqueue schedule-due --queue emails --limit 100
+```
+
+Dead-letter inspection:
+
+```bash
+redqueue dead-letters --queue emails --limit 20
+```
+
+All command output is JSON so it can be piped into scripts or log processors.
 
 ## Quick Start
 
