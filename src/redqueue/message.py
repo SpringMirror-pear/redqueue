@@ -23,6 +23,17 @@ def new_message_id() -> str:
     return uuid4().hex
 
 
+def new_trace_id() -> str:
+    """Create a stable opaque trace identifier.
+
+    Returns:
+        Hex-encoded UUID4 string suitable for correlating message lifecycle
+        events across producers, delayed scheduling, consumers, and retries.
+    """
+
+    return uuid4().hex
+
+
 @dataclass(frozen=True)
 class Message:
     """A normalized message returned by RedQueue consumers.
@@ -32,6 +43,8 @@ class Message:
         queue: Logical queue name.
         id: Stable RedQueue message id.
         headers: User metadata copied into the message envelope.
+        trace_id: Optional correlation id propagated through message lifecycle
+            events and mirrored into ``headers["trace_id"]``.
         attempts: Number of retry attempts already applied.
         created_at: Unix timestamp when the message object was created.
         available_at: Optional Unix timestamp used by delayed messages.
@@ -45,6 +58,7 @@ class Message:
     queue: str
     id: str = field(default_factory=new_message_id)
     headers: dict[str, Any] = field(default_factory=dict)
+    trace_id: str | None = None
     attempts: int = 0
     created_at: float = field(default_factory=time)
     available_at: float | None = None
@@ -62,9 +76,14 @@ class Message:
 
         message_id = self._normalize_required(self.id, field_name="id")
         queue = self._normalize_required(self.queue, field_name="queue")
+        headers = dict(self.headers)
+        trace_id = self._normalize_trace_id(self.trace_id, headers=headers)
         object.__setattr__(self, "id", message_id)
         object.__setattr__(self, "queue", queue)
-        object.__setattr__(self, "headers", dict(self.headers))
+        object.__setattr__(self, "trace_id", trace_id)
+        if trace_id is not None:
+            headers["trace_id"] = trace_id
+        object.__setattr__(self, "headers", headers)
 
         if self.attempts < 0:
             raise QueueConfigError("attempts must be greater than or equal to 0")
@@ -93,6 +112,33 @@ class Message:
         normalized = value.strip()
         if not normalized:
             raise QueueConfigError(f"message {field_name} must not be empty")
+        return normalized
+
+    @staticmethod
+    def _normalize_trace_id(
+        trace_id: str | None,
+        *,
+        headers: dict[str, Any],
+    ) -> str | None:
+        """Normalize an optional trace id.
+
+        Args:
+            trace_id: Explicit trace id passed to the message.
+            headers: Message headers that may contain a legacy ``trace_id``.
+
+        Returns:
+            Trimmed trace id or ``None``.
+
+        Raises:
+            QueueConfigError: If the trace id is empty after trimming.
+        """
+
+        value = trace_id if trace_id is not None else headers.get("trace_id")
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            raise QueueConfigError("message trace_id must not be empty")
         return normalized
 
     def with_attempt(self) -> Message:

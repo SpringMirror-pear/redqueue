@@ -142,6 +142,7 @@ class StreamBackend(BaseMessageBackend):
         *,
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Append a message to the active Redis Stream.
 
@@ -149,6 +150,7 @@ class StreamBackend(BaseMessageBackend):
             payload: Application payload.
             headers: Optional message metadata.
             message_id: Optional stable RedQueue message id.
+            trace_id: Optional correlation id propagated with the message.
 
         Returns:
             RedQueue message id.
@@ -159,6 +161,7 @@ class StreamBackend(BaseMessageBackend):
             queue=self.config.queue,
             payload=payload,
             headers=headers or {},
+            trace_id=trace_id,
             backend=self.backend_name,
         )
         self._publish_message(message)
@@ -248,6 +251,7 @@ class StreamBackend(BaseMessageBackend):
                 message.payload,
                 headers=message.headers,
                 message_id=message.id,
+                trace_id=message.trace_id,
             )
             self.ack(message)
         else:
@@ -381,7 +385,12 @@ class StreamBackend(BaseMessageBackend):
             message: Message returned by ``dead_letters``.
         """
 
-        self.publish(message.payload, headers=message.headers, message_id=message.id)
+        self.publish(
+            message.payload,
+            headers=message.headers,
+            message_id=message.id,
+            trace_id=message.trace_id,
+        )
         if message.raw_id:
             self._execute(
                 "redis.xack",

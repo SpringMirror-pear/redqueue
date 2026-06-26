@@ -95,6 +95,7 @@ class RealRedisAvailabilityTests(unittest.TestCase):
                 *,
                 headers: dict[str, object] | None = None,
                 message_id: str | None = None,
+                trace_id: str | None = None,
             ) -> str:
                 raise RuntimeError("publish failed")
 

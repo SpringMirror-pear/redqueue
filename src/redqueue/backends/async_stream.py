@@ -163,6 +163,7 @@ class AsyncStreamBackend(BaseMessageBackend):
         *,
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Append a message to the active Redis Stream.
 
@@ -170,6 +171,7 @@ class AsyncStreamBackend(BaseMessageBackend):
             payload: Application payload.
             headers: Optional message metadata.
             message_id: Optional stable RedQueue message id.
+            trace_id: Optional correlation id propagated with the message.
 
         Returns:
             RedQueue message id.
@@ -180,6 +182,7 @@ class AsyncStreamBackend(BaseMessageBackend):
             queue=self.config.queue,
             payload=payload,
             headers=headers or {},
+            trace_id=trace_id,
             backend=self.backend_name,
         )
         await self._publish_message(message)
@@ -269,6 +272,7 @@ class AsyncStreamBackend(BaseMessageBackend):
                 message.payload,
                 headers=message.headers,
                 message_id=message.id,
+                trace_id=message.trace_id,
             )
             await self.ack(message)
         else:
@@ -411,6 +415,7 @@ class AsyncStreamBackend(BaseMessageBackend):
             message.payload,
             headers=message.headers,
             message_id=message.id,
+            trace_id=message.trace_id,
         )
         if message.raw_id:
             await self._execute(

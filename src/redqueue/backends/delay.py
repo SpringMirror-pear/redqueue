@@ -96,6 +96,7 @@ class DelayBackend:
         run_at: float | None = None,
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Schedule a payload for future release.
 
@@ -105,6 +106,7 @@ class DelayBackend:
             run_at: Absolute Unix timestamp when the message is due.
             headers: Optional message metadata.
             message_id: Optional stable message id.
+            trace_id: Optional correlation id propagated with the message.
 
         Returns:
             Scheduled message id.
@@ -120,6 +122,7 @@ class DelayBackend:
             queue=self.config.queue,
             payload=payload,
             headers=headers or {},
+            trace_id=trace_id,
             available_at=available_at,
             backend=self.backend_name,
         )
@@ -181,6 +184,7 @@ class DelayBackend:
                     message.payload,
                     headers=message.headers,
                     message_id=message.id,
+                    trace_id=message.trace_id,
                 )
             except Exception:
                 self._execute(
@@ -274,6 +278,7 @@ class DelayBackend:
             "queue": message.queue,
             "payload": message.payload,
             "headers": message.headers,
+            "trace_id": message.trace_id,
             "attempts": message.attempts,
             "created_at": message.created_at,
             "available_at": message.available_at,
@@ -308,6 +313,7 @@ class DelayBackend:
             queue=str(envelope["queue"]),
             payload=envelope["payload"],
             headers=dict(envelope.get("headers") or {}),
+            trace_id=envelope.get("trace_id"),
             attempts=int(envelope.get("attempts") or 0),
             created_at=float(envelope["created_at"]),
             available_at=envelope.get("available_at"),
@@ -362,6 +368,7 @@ class DelayBackend:
                 type=event_type,
                 queue=self.config.queue,
                 message_id=message.id,
+                trace_id=message.trace_id,
                 backend=self.backend_name,
             )
         )

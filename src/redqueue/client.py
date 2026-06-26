@@ -162,6 +162,7 @@ class QueueClient:
         delay: float | None = None,
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Publish a message immediately or schedule it for later.
 
@@ -172,17 +173,25 @@ class QueueClient:
             headers: Optional metadata stored with the message.
             message_id: Optional stable message id. When omitted, RedQueue
                 generates one.
+            trace_id: Optional correlation id propagated with message lifecycle
+                events.
 
         Returns:
             The RedQueue message id.
         """
 
         if delay is not None:
-            return self.delay(payload, delay_seconds=delay, headers=headers)
+            return self.delay(
+                payload,
+                delay_seconds=delay,
+                headers=headers,
+                trace_id=trace_id,
+            )
         return self.backend.publish(
             payload,
             headers=headers,
             message_id=message_id,
+            trace_id=trace_id,
         )
 
     def consume(
@@ -257,6 +266,7 @@ class QueueClient:
         delay_seconds: float | None = None,
         run_at: float | None = None,
         headers: dict[str, Any] | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Schedule a payload for future delivery.
 
@@ -265,6 +275,8 @@ class QueueClient:
             delay_seconds: Relative delay in seconds.
             run_at: Absolute Unix timestamp when the message becomes due.
             headers: Optional metadata stored with the message.
+            trace_id: Optional correlation id propagated when the delayed
+                message is released.
 
         Returns:
             The scheduled message id.
@@ -279,6 +291,7 @@ class QueueClient:
             delay_seconds=delay_seconds,
             run_at=run_at,
             headers=headers,
+            trace_id=trace_id,
         )
         return message_id
 

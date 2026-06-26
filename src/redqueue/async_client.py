@@ -151,6 +151,7 @@ class AsyncQueueClient:
         delay: float | None = None,
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Publish a message immediately or schedule it for later.
 
@@ -159,18 +160,26 @@ class AsyncQueueClient:
             delay: Optional relative delay in seconds.
             headers: Optional metadata stored with the message.
             message_id: Optional stable message id.
+            trace_id: Optional correlation id propagated with message lifecycle
+                events.
 
         Returns:
             The RedQueue message id.
         """
 
         if delay is not None:
-            return await self.delay(payload, delay_seconds=delay, headers=headers)
+            return await self.delay(
+                payload,
+                delay_seconds=delay,
+                headers=headers,
+                trace_id=trace_id,
+            )
         backend = await self._ensure_backend()
         return await backend.publish(
             payload,
             headers=headers,
             message_id=message_id,
+            trace_id=trace_id,
         )
 
     async def consume(
@@ -240,6 +249,7 @@ class AsyncQueueClient:
         delay_seconds: float | None = None,
         run_at: float | None = None,
         headers: dict[str, Any] | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Schedule a payload for future async delivery.
 
@@ -248,6 +258,8 @@ class AsyncQueueClient:
             delay_seconds: Relative delay in seconds.
             run_at: Absolute Unix timestamp when the message becomes due.
             headers: Optional metadata stored with the message.
+            trace_id: Optional correlation id propagated when the delayed
+                message is released.
 
         Returns:
             The scheduled message id.
@@ -259,6 +271,7 @@ class AsyncQueueClient:
             delay_seconds=delay_seconds,
             run_at=run_at,
             headers=headers,
+            trace_id=trace_id,
         )
         return message_id
 

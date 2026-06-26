@@ -79,7 +79,12 @@ class FakeCliClient:
         self.consumer_name = consumer_name
         self.closed = False
         self.messages = [
-            Message(id="msg-1", queue=queue, payload={"task": "send"}),
+            Message(
+                id="msg-1",
+                queue=queue,
+                payload={"task": "send"},
+                trace_id="trace-consume",
+            ),
             Message(id="msg-2", queue=queue, payload={"task": "audit"}),
         ]
         self.actions: list[tuple[str, str]] = []
@@ -90,11 +95,13 @@ class FakeCliClient:
         *,
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Return a deterministic published message id."""
 
         self.payload = payload
         self.headers = headers
+        self.trace_id = trace_id
         return message_id or "published-1"
 
     def consume(
@@ -138,6 +145,7 @@ class FakeCliClient:
         delay_seconds: float | None = None,
         run_at: float | None = None,
         headers: dict[str, Any] | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Return a deterministic delayed message id."""
 
@@ -145,6 +153,7 @@ class FakeCliClient:
         self.delay_seconds = delay_seconds
         self.run_at = run_at
         self.headers = headers
+        self.trace_id = trace_id
         return "delayed-1"
 
     def schedule_due(self, *, limit: int = 100, now: float | None = None) -> int:
@@ -158,7 +167,14 @@ class FakeCliClient:
         """Return fake dead letters."""
 
         self.limit = limit
-        return [Message(id="dead-1", queue=self.queue, payload={"failed": True})]
+        return [
+            Message(
+                id="dead-1",
+                queue=self.queue,
+                payload={"failed": True},
+                trace_id="trace-dead",
+            )
+        ]
 
     def close(self) -> None:
         """Record resource cleanup."""
@@ -233,6 +249,8 @@ class CliTests(unittest.TestCase):
             '{"to":"user@example.com"}',
             "--headers",
             '{"trace_id":"abc"}',
+            "--trace-id",
+            "trace-cli",
         )
 
         self.assertEqual(code, 0)
@@ -240,6 +258,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(data["message_id"], "published-1")
         self.assertEqual(client.payload, {"to": "user@example.com"})
         self.assertEqual(client.headers, {"trace_id": "abc"})
+        self.assertEqual(client.trace_id, "trace-cli")
         self.assertTrue(client.closed)
 
     def test_consume_can_ack_batch(self) -> None:
@@ -256,6 +275,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertEqual(data["count"], 2)
         self.assertEqual(data["action"], "ack")
+        self.assertEqual(data["messages"][0]["trace_id"], "trace-consume")
         self.assertEqual(client.actions, [("ack", "msg-1"), ("ack", "msg-2")])
         self.assertTrue(client.closed)
 
@@ -268,12 +288,15 @@ class CliTests(unittest.TestCase):
             '{"to":"later@example.com"}',
             "--delay-seconds",
             "30",
+            "--trace-id",
+            "trace-delay",
         )
 
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
         self.assertEqual(data["message_id"], "delayed-1")
         self.assertEqual(client.delay_seconds, 30)
+        self.assertEqual(client.trace_id, "trace-delay")
         self.assertTrue(client.closed)
 
         next_client = FakeCliClient(
@@ -312,6 +335,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["messages"][0]["id"], "dead-1")
+        self.assertEqual(data["messages"][0]["trace_id"], "trace-dead")
         self.assertTrue(client.closed)
 
     def test_invalid_json_returns_user_error(self) -> None:

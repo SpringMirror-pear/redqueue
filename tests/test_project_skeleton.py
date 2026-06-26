@@ -39,6 +39,7 @@ from redqueue import (
     detect_capabilities_async,
     extract_redis_version,
     new_message_id,
+    new_trace_id,
 )
 from tests.fakes import (
     FakeAsyncListRedis,
@@ -50,7 +51,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.12.0")
+        self.assertEqual(__version__, "0.13.0")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -111,9 +112,20 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertEqual(message.id, message_id)
         self.assertEqual(message.queue, "emails")
+        self.assertEqual(message.trace_id, "abc")
         self.assertEqual(message.headers, {"trace_id": "abc"})
         self.assertEqual(message.with_attempt().attempts, 1)
         self.assertEqual(message.with_backend("list").backend, "list")
+
+        traced = Message(
+            id="msg-trace",
+            queue="emails",
+            payload={"to": "user@example.com"},
+            trace_id=" trace-123 ",
+        )
+        self.assertEqual(traced.trace_id, "trace-123")
+        self.assertEqual(traced.headers["trace_id"], "trace-123")
+        self.assertTrue(new_trace_id())
 
     def test_message_rejects_invalid_values(self) -> None:
         invalid_messages = [
@@ -122,6 +134,7 @@ class ProjectSkeletonTests(unittest.TestCase):
             {"id": "msg", "queue": "emails", "payload": None, "attempts": -1},
             {"id": "msg", "queue": "emails", "payload": None, "created_at": -1},
             {"id": "msg", "queue": "emails", "payload": None, "available_at": -1},
+            {"id": "msg", "queue": "emails", "payload": None, "trace_id": " "},
         ]
 
         for kwargs in invalid_messages:
@@ -337,6 +350,27 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertIs(events[0].type, MonitoringEventType.CLIENT_CREATED)
         self.assertIs(events[-1].type, MonitoringEventType.MESSAGE_PUBLISHED)
 
+    def test_sync_list_backend_propagates_trace_id(self) -> None:
+        hook = InMemoryMonitoringHook()
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(queue="emails", monitoring=hook),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        message_id = client.publish(
+            {"to": "user@example.com"},
+            trace_id="trace-sync",
+        )
+        message = client.consume(timeout=1)
+
+        self.assertIsInstance(message, Message)
+        self.assertEqual(message.id, message_id)
+        self.assertEqual(message.trace_id, "trace-sync")
+        self.assertEqual(message.headers["trace_id"], "trace-sync")
+        self.assertEqual(hook.events[-1].trace_id, "trace-sync")
+
     def test_async_client_emits_monitoring_event(self) -> None:
         async def run() -> InMemoryMonitoringHook:
             hook = InMemoryMonitoringHook()
@@ -352,11 +386,30 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertEqual(len(hook.events), 1)
         self.assertIs(hook.events[0].type, MonitoringEventType.CLIENT_CREATED)
 
+    def test_async_list_backend_propagates_trace_id(self) -> None:
+        async def run() -> Message:
+            redis = FakeAsyncListRedis()
+            client = AsyncQueueClient(
+                QueueConfig(queue="jobs"),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            await client.publish({"task": "sync"}, trace_id="trace-async")
+            message = await client.consume(timeout=1)
+            self.assertIsInstance(message, Message)
+            return message
+
+        message = asyncio.run(run())
+
+        self.assertEqual(message.trace_id, "trace-async")
+        self.assertEqual(message.headers["trace_id"], "trace-async")
+
     def test_monitoring_event_to_dict_excludes_payload(self) -> None:
         event = MonitoringEvent(
             type=MonitoringEventType.MESSAGE_PUBLISHED,
             queue="emails",
             message_id="msg-1",
+            trace_id="trace-1",
             backend="list",
             duration_ms=1.5,
             attributes={"key": "rq:{emails}:ready"},
@@ -366,6 +419,7 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertEqual(data["type"], "message.published")
         self.assertEqual(data["message_id"], "msg-1")
+        self.assertEqual(data["trace_id"], "trace-1")
         self.assertNotIn("payload", data)
 
     def test_monitoring_hooks_store_fanout_and_isolate_errors(self) -> None:
@@ -1047,6 +1101,20 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertIn("xack", redis.commands)
 
+    def test_stream_backend_propagates_trace_id(self) -> None:
+        redis = FakeStreamRedis()
+        client = QueueClient(
+            QueueConfig(queue="events", backend="stream"),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        client.publish({"event": "created"}, trace_id="trace-stream")
+        message = client.consume(timeout=1)
+
+        self.assertIsInstance(message, Message)
+        self.assertEqual(message.trace_id, "trace-stream")
+
     def test_stream_backend_retry_dead_letters_and_autoclaims(self) -> None:
         redis = FakeStreamRedis()
         client = QueueClient(
@@ -1133,7 +1201,11 @@ class ProjectSkeletonTests(unittest.TestCase):
         )
 
         future_id = client.delay({"to": "future@example.com"}, run_at=200)
-        due_id = client.delay({"to": "due@example.com"}, run_at=100)
+        due_id = client.delay(
+            {"to": "due@example.com"},
+            run_at=100,
+            trace_id="trace-delay",
+        )
 
         self.assertEqual(client.schedule_due(now=150), 1)
         self.assertEqual(client.schedule_due(now=150), 0)
@@ -1144,6 +1216,7 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertEqual(message.id, due_id)
         self.assertEqual(message.payload, {"to": "due@example.com"})
+        self.assertEqual(message.trace_id, "trace-delay")
         event_types = [event.type for event in hook.events]
         self.assertIn(MonitoringEventType.DELAY_SCHEDULED, event_types)
         self.assertIn(MonitoringEventType.DELAY_RELEASED, event_types)
@@ -1175,6 +1248,7 @@ class ProjectSkeletonTests(unittest.TestCase):
                 *,
                 headers: dict[str, object] | None = None,
                 message_id: str | None = None,
+                trace_id: str | None = None,
             ) -> str:
                 raise RuntimeError("publish failed")
 
@@ -1201,13 +1275,18 @@ class ProjectSkeletonTests(unittest.TestCase):
                 redis=redis,
                 capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
             )
-            message_id = await client.delay({"task": "later"}, run_at=100)
+            message_id = await client.delay(
+                {"task": "later"},
+                run_at=100,
+                trace_id="trace-async-delay",
+            )
             released = await client.schedule_due(now=150)
             message = await client.consume(timeout=1)
 
             self.assertEqual(released, 1)
             self.assertEqual(message.id, message_id)
             self.assertEqual(message.payload, {"task": "later"})
+            self.assertEqual(message.trace_id, "trace-async-delay")
             return redis, message_id
 
         redis, message_id = asyncio.run(run())

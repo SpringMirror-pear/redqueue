@@ -7,6 +7,32 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.13.0] - 2026-06-27
+
+### Added
+
+- Added first-class `trace_id` support to `Message`, sync and async
+  `publish()`, sync and async `delay()`, List, Streams, and delayed task
+  backends.
+- Added trace propagation through message envelopes, retry, dead-letter,
+  delayed release, and requeue flows while remaining compatible with existing
+  `headers["trace_id"]` messages.
+- Added `trace_id` to monitoring events and CLI message output for lifecycle
+  correlation.
+- Added CLI `--trace-id` support for `publish` and `delay`.
+- Added `new_trace_id()` helper for callers that want RedQueue-generated trace
+  identifiers.
+
+### 新增
+
+- `Message`、同步和异步 `publish()`、同步和异步 `delay()`、List、Streams
+  和延迟任务后端新增一等 `trace_id` 支持。
+- trace 会穿过消息 envelope、重试、死信、延迟释放和重放流程，并兼容已有的
+  `headers["trace_id"]` 消息。
+- 监控事件和 CLI 消息输出新增 `trace_id`，方便按链路聚合生命周期事件。
+- CLI 的 `publish` 和 `delay` 命令新增 `--trace-id`。
+- 新增 `new_trace_id()` helper，方便调用方生成 RedQueue trace 标识。
+
 ## [0.12.0] - 2026-06-23
 
 ### Added

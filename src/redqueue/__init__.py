@@ -26,7 +26,7 @@ from redqueue.exceptions import (
     RedQueueError,
     RetryExceededError,
 )
-from redqueue.message import Message, new_message_id
+from redqueue.message import Message, new_message_id, new_trace_id
 from redqueue.monitoring import (
     CompositeMonitoringHook,
     InMemoryMonitoringHook,
@@ -72,4 +72,5 @@ __all__ = [
     "detect_capabilities_async",
     "extract_redis_version",
     "new_message_id",
+    "new_trace_id",
 ]

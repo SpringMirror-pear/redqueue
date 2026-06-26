@@ -105,6 +105,7 @@ class ListBackend(BaseListBackend):
         *,
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str:
         """Publish a payload to the ready list.
 
@@ -112,6 +113,7 @@ class ListBackend(BaseListBackend):
             payload: Application payload.
             headers: Optional message metadata.
             message_id: Optional stable message id.
+            trace_id: Optional correlation id propagated with the message.
 
         Returns:
             Message id.
@@ -122,6 +124,7 @@ class ListBackend(BaseListBackend):
             queue=self.config.queue,
             payload=payload,
             headers=headers or {},
+            trace_id=trace_id,
             backend=self.backend_name,
         )
         encoded = message.raw_payload or self._encode(message)

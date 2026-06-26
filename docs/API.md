@@ -1,8 +1,8 @@
 # RedQueue API / RedQueue API 文档
 
-This document describes the public API available in RedQueue `0.12.0`.
+This document describes the public API available in RedQueue `0.13.0`.
 
-本文档描述 RedQueue `0.12.0` 的公开 API。
+本文档描述 RedQueue `0.13.0` 的公开 API。
 
 ## Clients / 客户端
 
@@ -27,12 +27,12 @@ Methods / 方法：
 - `from_url(url, *, queue, backend="list", connection_manager=None, **options) -> QueueClient`
   - Advanced options include `pool_options`, injected `redis`, injected
     `capabilities`, and `owns_redis`.
-- `publish(payload, *, delay=None, headers=None, message_id=None) -> str`
+- `publish(payload, *, delay=None, headers=None, message_id=None, trace_id=None) -> str`
 - `consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `ack(message) -> None`
 - `nack(message, *, requeue=True) -> None`
 - `retry(message, *, delay=None, reason=None) -> None`
-- `delay(payload, *, delay_seconds=None, run_at=None, headers=None) -> str`
+- `delay(payload, *, delay_seconds=None, run_at=None, headers=None, trace_id=None) -> str`
 - `schedule_due(*, limit=100, now=None) -> int`
 - `recover_stale(*, min_idle_ms=None, limit=100) -> int`
 - `dead_letters(*, limit=100) -> list[Message]`
@@ -61,12 +61,12 @@ Methods / 方法：
 - `await from_url(url, *, queue, backend="list", connection_manager=None, **options) -> AsyncQueueClient`
   - Advanced options include `pool_options`, injected `redis`, injected
     `capabilities`, and `owns_redis`.
-- `await publish(payload, *, delay=None, headers=None, message_id=None) -> str`
+- `await publish(payload, *, delay=None, headers=None, message_id=None, trace_id=None) -> str`
 - `await consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `await ack(message) -> None`
 - `await nack(message, *, requeue=True) -> None`
 - `await retry(message, *, delay=None, reason=None) -> None`
-- `await delay(payload, *, delay_seconds=None, run_at=None, headers=None) -> str`
+- `await delay(payload, *, delay_seconds=None, run_at=None, headers=None, trace_id=None) -> str`
 - `await schedule_due(*, limit=100, now=None) -> int`
 - `await recover_stale(*, min_idle_ms=None, limit=100) -> int`
 - `await dead_letters(*, limit=100) -> list[Message]`
@@ -190,6 +190,7 @@ Fields / 字段：
 - `queue: str`
 - `payload: Any`
 - `headers: dict[str, Any]`
+- `trace_id: str | None`
 - `attempts: int`
 - `created_at: float`
 - `available_at: float | None`
@@ -202,6 +203,29 @@ Helpers / 辅助方法：
 - `with_attempt() -> Message`
 - `with_backend(backend, *, raw_id=None, raw_payload=None) -> Message`
 - `new_message_id() -> str`
+- `new_trace_id() -> str`
+
+## Trace IDs / 链路追踪
+
+`trace_id` is an optional lifecycle correlation id. It can be supplied to
+`publish()` or `delay()`, is mirrored into `Message.headers["trace_id"]`, and is
+preserved through consume, ack, nack, retry, delayed release, dead-letter, and
+requeue flows.
+
+`trace_id` 是可选的生命周期关联 ID。可以在 `publish()` 或 `delay()` 中传入，
+会同步写入 `Message.headers["trace_id"]`，并在消费、ack、nack、retry、
+延迟释放、死信和重放流程中保持传递。
+
+```python
+from redqueue import QueueClient, new_trace_id
+
+client = QueueClient.from_url("redis://127.0.0.1:6379/0", queue="emails")
+trace_id = new_trace_id()
+client.publish({"to": "user@example.com"}, trace_id=trace_id)
+message = client.consume(timeout=1)
+
+assert message.trace_id == trace_id
+```
 
 ## Backends / 后端
 
@@ -303,6 +327,10 @@ Monitoring events do not include business payload by default.
 
 监控事件默认不包含业务 payload。
 
+Monitoring events include `trace_id` when a message operation has one.
+
+消息操作存在 `trace_id` 时，监控事件会包含该字段。
+
 ## Redis Capability Detection / Redis 能力探测
 
 - `RedisVersion`
@@ -317,19 +345,19 @@ Streams are rejected with `RedisCompatibilityError` when Redis is below `5.0`.
 
 ## CLI / 命令行工具
 
-RedQueue `0.12.0` provides a `redqueue` console command and a
+RedQueue `0.13.0` provides a `redqueue` console command and a
 `python -m redqueue` module entry point for developer diagnostics.
 
-RedQueue `0.12.0` 提供 `redqueue` 控制台命令和 `python -m redqueue`
+RedQueue `0.13.0` 提供 `redqueue` 控制台命令和 `python -m redqueue`
 模块入口，用于开发者调试。
 
 Commands / 命令：
 
 - `redqueue check --url redis://127.0.0.1:6379/0`
 - `redqueue stats --queue emails [--backend list|stream]`
-- `redqueue publish --queue emails --payload '{"to":"user@example.com"}'`
+- `redqueue publish --queue emails --payload '{"to":"user@example.com"}' [--trace-id trace-123]`
 - `redqueue consume --queue emails [--ack|--nack|--retry]`
-- `redqueue delay --queue emails --payload '{"to":"later@example.com"}' --delay-seconds 60`
+- `redqueue delay --queue emails --payload '{"to":"later@example.com"}' --delay-seconds 60 [--trace-id trace-123]`
 - `redqueue schedule-due --queue emails --limit 100`
 - `redqueue dead-letters --queue emails --limit 20`
 
@@ -341,6 +369,7 @@ Common options / 通用选项：
 - `--namespace`: Redis key namespace. Defaults to `rq`.
 - `--consumer-group`: Streams consumer group. Defaults to `redqueue`.
 - `--consumer-name`: Optional Streams consumer name.
+- `--trace-id`: Optional trace id for `publish` and `delay`.
 
 Payload and headers are JSON strings. Command responses are stable JSON objects.
 

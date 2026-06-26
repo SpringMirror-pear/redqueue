@@ -17,6 +17,7 @@ https://github.com/SpringMirror-pear/redqueue.git
 - 同步客户端 `QueueClient` 与异步客户端 `AsyncQueueClient`。
 - 支持同步和异步 Redis 连接池管理器，方便多个客户端共享连接池。
 - 提供 `redqueue` CLI，用于本地调试和运行时检查。
+- 一等 `trace_id` 链路追踪能力，贯穿消息生命周期。
 - 带结构化上下文的统一异常体系。
 - 针对发布、消费、确认、拒绝、重试、死信、延迟和后端错误的监控事件。
 - 通过 `INFO server` 探测 Redis 能力。
@@ -76,6 +77,12 @@ redqueue publish --queue emails --payload '{"to":"user@example.com"}'
 redqueue consume --queue emails --timeout 1 --ack
 ```
 
+发布时指定 trace：
+
+```bash
+redqueue publish --queue emails --payload '{"to":"user@example.com"}' --trace-id trace-123
+```
+
 调试延迟任务：
 
 ```bash
@@ -96,7 +103,7 @@ redqueue dead-letters --queue emails --limit 20
 同步 List 队列：
 
 ```python
-from redqueue import QueueClient
+from redqueue import QueueClient, new_trace_id
 
 client = QueueClient.from_url(
     "redis://127.0.0.1:6379/0",
@@ -104,11 +111,13 @@ client = QueueClient.from_url(
     backend="list",
 )
 
-message_id = client.publish({"to": "user@example.com"})
+trace_id = new_trace_id()
+message_id = client.publish({"to": "user@example.com"}, trace_id=trace_id)
 message = client.consume(timeout=1)
 
 if message is not None:
     try:
+        print(message.trace_id)
         print(message.payload)
         client.ack(message)
     except Exception:
@@ -162,8 +171,28 @@ asyncio.run(main())
 from redqueue import QueueClient
 
 client = QueueClient.from_url("redis://127.0.0.1:6379/0", queue="emails")
-client.delay({"to": "later@example.com"}, delay_seconds=60)
+client.delay({"to": "later@example.com"}, delay_seconds=60, trace_id="trace-123")
 released = client.schedule_due(limit=100)
+```
+
+链路追踪：
+
+```python
+from redqueue import InMemoryMonitoringHook, QueueClient, new_trace_id
+
+hook = InMemoryMonitoringHook()
+client = QueueClient.from_url(
+    "redis://127.0.0.1:6379/0",
+    queue="emails",
+    monitoring=hook,
+)
+
+trace_id = new_trace_id()
+client.publish({"to": "user@example.com"}, trace_id=trace_id)
+message = client.consume(timeout=1)
+
+assert message.trace_id == trace_id
+assert hook.events[-1].trace_id == trace_id
 ```
 
 连接池管理：

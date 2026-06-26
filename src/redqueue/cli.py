@@ -113,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_queue_args(publish)
     add_payload_args(publish)
     publish.add_argument("--message-id", default=None)
+    publish.add_argument("--trace-id", default=None)
     publish.set_defaults(handler=handle_publish)
 
     consume = subcommands.add_parser("consume", help="consume messages")
@@ -134,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     delay = subcommands.add_parser("delay", help="schedule a delayed message")
     add_queue_args(delay)
     add_payload_args(delay)
+    delay.add_argument("--trace-id", default=None)
     delay_time = delay.add_mutually_exclusive_group()
     delay_time.add_argument("--delay-seconds", type=float, default=None)
     delay_time.add_argument("--run-at", type=float, default=None)
@@ -299,6 +301,7 @@ def handle_publish(
             payload,
             headers=headers,
             message_id=args.message_id,
+            trace_id=args.trace_id,
         )
         return {"message_id": message_id, "queue": args.queue, "backend": args.backend}
     finally:
@@ -348,6 +351,7 @@ def handle_delay(
             delay_seconds=args.delay_seconds,
             run_at=args.run_at,
             headers=headers,
+            trace_id=args.trace_id,
         )
         return {"message_id": message_id, "queue": args.queue, "backend": args.backend}
     finally:
@@ -470,6 +474,7 @@ def message_to_dict(message: Message) -> dict[str, Any]:
         "queue": message.queue,
         "payload": message.payload,
         "headers": message.headers,
+        "trace_id": message.trace_id,
         "attempts": message.attempts,
         "created_at": message.created_at,
         "available_at": message.available_at,

@@ -39,6 +39,7 @@ class MonitoringEvent:
         queue: Logical queue name.
         timestamp: Unix timestamp when the event was created.
         message_id: Optional RedQueue message id.
+        trace_id: Optional correlation id shared by message lifecycle events.
         backend: Optional backend name.
         duration_ms: Optional operation duration in milliseconds.
         error: Optional error text for failure events.
@@ -50,6 +51,7 @@ class MonitoringEvent:
     queue: str
     timestamp: float = field(default_factory=time)
     message_id: str | None = None
+    trace_id: str | None = None
     backend: str | None = None
     duration_ms: float | None = None
     error: str | None = None
@@ -69,6 +71,8 @@ class MonitoringEvent:
         }
         if self.message_id is not None:
             data["message_id"] = self.message_id
+        if self.trace_id is not None:
+            data["trace_id"] = self.trace_id
         if self.backend is not None:
             data["backend"] = self.backend
         if self.duration_ms is not None:

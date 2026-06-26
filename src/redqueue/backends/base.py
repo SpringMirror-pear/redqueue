@@ -47,6 +47,7 @@ class BaseMessageBackend:
             "queue": message.queue,
             "payload": message.payload,
             "headers": message.headers,
+            "trace_id": message.trace_id,
             "attempts": message.attempts,
             "created_at": message.created_at,
             "available_at": message.available_at,
@@ -81,6 +82,7 @@ class BaseMessageBackend:
             queue=str(envelope["queue"]),
             payload=envelope["payload"],
             headers=dict(envelope.get("headers") or {}),
+            trace_id=envelope.get("trace_id"),
             attempts=int(envelope.get("attempts") or 0),
             created_at=float(envelope["created_at"]),
             available_at=envelope.get("available_at"),
@@ -109,6 +111,7 @@ class BaseMessageBackend:
                 type=event_type,
                 queue=self.config.queue,
                 message_id=message.id,
+                trace_id=message.trace_id,
                 backend=self.backend_name,
                 attributes=attributes or {},
             )

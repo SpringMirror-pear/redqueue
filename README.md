@@ -18,6 +18,7 @@ https://github.com/SpringMirror-pear/redqueue.git
 - Sync client `QueueClient` and async client `AsyncQueueClient`.
 - Redis connection pool managers for shared sync and async resources.
 - `redqueue` CLI for local debugging and operational checks.
+- First-class `trace_id` propagation for lifecycle tracing.
 - Unified exception hierarchy with structured context.
 - Monitoring events for publish, consume, ack, nack, retry, dead letter, delay,
   and backend errors.
@@ -78,6 +79,12 @@ redqueue publish --queue emails --payload '{"to":"user@example.com"}'
 redqueue consume --queue emails --timeout 1 --ack
 ```
 
+Publish with trace correlation:
+
+```bash
+redqueue publish --queue emails --payload '{"to":"user@example.com"}' --trace-id trace-123
+```
+
 Delayed task debugging:
 
 ```bash
@@ -98,7 +105,7 @@ All command output is JSON so it can be piped into scripts or log processors.
 Synchronous List queue:
 
 ```python
-from redqueue import QueueClient
+from redqueue import QueueClient, new_trace_id
 
 client = QueueClient.from_url(
     "redis://127.0.0.1:6379/0",
@@ -106,11 +113,13 @@ client = QueueClient.from_url(
     backend="list",
 )
 
-message_id = client.publish({"to": "user@example.com"})
+trace_id = new_trace_id()
+message_id = client.publish({"to": "user@example.com"}, trace_id=trace_id)
 message = client.consume(timeout=1)
 
 if message is not None:
     try:
+        print(message.trace_id)
         print(message.payload)
         client.ack(message)
     except Exception:
@@ -164,8 +173,28 @@ Delayed task:
 from redqueue import QueueClient
 
 client = QueueClient.from_url("redis://127.0.0.1:6379/0", queue="emails")
-client.delay({"to": "later@example.com"}, delay_seconds=60)
+client.delay({"to": "later@example.com"}, delay_seconds=60, trace_id="trace-123")
 released = client.schedule_due(limit=100)
+```
+
+Trace IDs:
+
+```python
+from redqueue import InMemoryMonitoringHook, QueueClient, new_trace_id
+
+hook = InMemoryMonitoringHook()
+client = QueueClient.from_url(
+    "redis://127.0.0.1:6379/0",
+    queue="emails",
+    monitoring=hook,
+)
+
+trace_id = new_trace_id()
+client.publish({"to": "user@example.com"}, trace_id=trace_id)
+message = client.consume(timeout=1)
+
+assert message.trace_id == trace_id
+assert hook.events[-1].trace_id == trace_id
 ```
 
 Connection pool management:
