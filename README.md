@@ -334,7 +334,7 @@ REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "
 
 Latest local run on Python `3.14.5`:
 
-- Full test suite without `REDQUEUE_REDIS_URL`: `77 passed, 8 skipped`.
+- Full test suite without `REDQUEUE_REDIS_URL`: `102 passed, 8 skipped`.
 - Real Redis availability suite: `3 passed` with
   `redis://127.0.0.1:6379/0`.
 - Real Redis server: Redis for Windows `5.0.14.1`.

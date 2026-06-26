@@ -51,7 +51,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.13.0")
+        self.assertEqual(__version__, "0.13.1")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -126,6 +126,28 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertEqual(traced.trace_id, "trace-123")
         self.assertEqual(traced.headers["trace_id"], "trace-123")
         self.assertTrue(new_trace_id())
+
+    def test_message_accepts_blank_legacy_trace_header(self) -> None:
+        message = Message(
+            id="legacy-msg",
+            queue="emails",
+            payload={"to": "user@example.com"},
+            headers={"trace_id": " "},
+        )
+
+        self.assertIsNone(message.trace_id)
+        self.assertEqual(message.headers, {"trace_id": " "})
+
+        traced = Message(
+            id="override-msg",
+            queue="emails",
+            payload={"to": "user@example.com"},
+            headers={"trace_id": "old-trace"},
+            trace_id=" new-trace ",
+        )
+
+        self.assertEqual(traced.trace_id, "new-trace")
+        self.assertEqual(traced.headers["trace_id"], "new-trace")
 
     def test_message_rejects_invalid_values(self) -> None:
         invalid_messages = [
@@ -1222,6 +1244,25 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertIn(MonitoringEventType.DELAY_RELEASED, event_types)
         self.assertEqual(event_types.count(MonitoringEventType.DELAY_SCHEDULED), 2)
 
+    def test_sync_publish_delay_preserves_message_id(self) -> None:
+        client = QueueClient(
+            QueueConfig(queue="emails"),
+            redis=FakeListRedis(),
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        message_id = client.publish(
+            {"to": "later@example.com"},
+            delay=60,
+            message_id="fixed-delay-id",
+        )
+        client.schedule_due(now=9_999_999_999)
+        message = client.consume(timeout=1)
+
+        self.assertEqual(message_id, "fixed-delay-id")
+        self.assertIsInstance(message, Message)
+        self.assertEqual(message.id, "fixed-delay-id")
+
     def test_delay_backend_cleans_payload_when_zadd_fails(self) -> None:
         class BrokenZaddRedis(FakeListRedis):
             def zadd(self, name: str, mapping: dict[str, float]) -> int:
@@ -1292,6 +1333,29 @@ class ProjectSkeletonTests(unittest.TestCase):
         redis, message_id = asyncio.run(run())
 
         self.assertNotIn(message_id, redis.sorted_sets["rq:{jobs}:delayed"])
+
+    def test_async_publish_delay_preserves_message_id(self) -> None:
+        async def run() -> Message:
+            client = AsyncQueueClient(
+                QueueConfig(queue="jobs"),
+                redis=FakeAsyncListRedis(),
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            message_id = await client.publish(
+                {"task": "later"},
+                delay=60,
+                message_id="fixed-async-delay-id",
+            )
+            await client.schedule_due(now=9_999_999_999)
+            message = await client.consume(timeout=1)
+
+            self.assertEqual(message_id, "fixed-async-delay-id")
+            self.assertIsInstance(message, Message)
+            return message
+
+        message = asyncio.run(run())
+
+        self.assertEqual(message.id, "fixed-async-delay-id")
 
     def test_async_delay_backend_cleans_payload_when_zadd_fails(self) -> None:
         class BrokenAsyncZaddRedis(FakeAsyncListRedis):

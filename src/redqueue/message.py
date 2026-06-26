@@ -130,16 +130,21 @@ class Message:
             Trimmed trace id or ``None``.
 
         Raises:
-            QueueConfigError: If the trace id is empty after trimming.
+            QueueConfigError: If an explicit trace id is empty after trimming.
         """
 
-        value = trace_id if trace_id is not None else headers.get("trace_id")
-        if value is None:
+        if trace_id is not None:
+            normalized = str(trace_id).strip()
+            if not normalized:
+                raise QueueConfigError("message trace_id must not be empty")
+            return normalized
+
+        header_value = headers.get("trace_id")
+        if header_value is None:
             return None
-        normalized = str(value).strip()
-        if not normalized:
-            raise QueueConfigError("message trace_id must not be empty")
-        return normalized
+
+        normalized = str(header_value).strip()
+        return normalized or None
 
     def with_attempt(self) -> Message:
         """Return a copy with attempts incremented by one.

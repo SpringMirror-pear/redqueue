@@ -185,6 +185,7 @@ class QueueClient:
                 payload,
                 delay_seconds=delay,
                 headers=headers,
+                message_id=message_id,
                 trace_id=trace_id,
             )
         return self.backend.publish(
@@ -266,6 +267,7 @@ class QueueClient:
         delay_seconds: float | None = None,
         run_at: float | None = None,
         headers: dict[str, Any] | None = None,
+        message_id: str | None = None,
         trace_id: str | None = None,
     ) -> str:
         """Schedule a payload for future delivery.
@@ -275,6 +277,8 @@ class QueueClient:
             delay_seconds: Relative delay in seconds.
             run_at: Absolute Unix timestamp when the message becomes due.
             headers: Optional metadata stored with the message.
+            message_id: Optional stable message id. When omitted, RedQueue
+                generates one.
             trace_id: Optional correlation id propagated when the delayed
                 message is released.
 
@@ -291,6 +295,7 @@ class QueueClient:
             delay_seconds=delay_seconds,
             run_at=run_at,
             headers=headers,
+            message_id=message_id,
             trace_id=trace_id,
         )
         return message_id

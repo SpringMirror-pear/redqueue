@@ -1,8 +1,8 @@
 # RedQueue API / RedQueue API 文档
 
-This document describes the public API available in RedQueue `0.13.0`.
+This document describes the public API available in RedQueue `0.13.1`.
 
-本文档描述 RedQueue `0.13.0` 的公开 API。
+本文档描述 RedQueue `0.13.1` 的公开 API。
 
 ## Clients / 客户端
 
@@ -32,7 +32,7 @@ Methods / 方法：
 - `ack(message) -> None`
 - `nack(message, *, requeue=True) -> None`
 - `retry(message, *, delay=None, reason=None) -> None`
-- `delay(payload, *, delay_seconds=None, run_at=None, headers=None, trace_id=None) -> str`
+- `delay(payload, *, delay_seconds=None, run_at=None, headers=None, message_id=None, trace_id=None) -> str`
 - `schedule_due(*, limit=100, now=None) -> int`
 - `recover_stale(*, min_idle_ms=None, limit=100) -> int`
 - `dead_letters(*, limit=100) -> list[Message]`
@@ -66,7 +66,7 @@ Methods / 方法：
 - `await ack(message) -> None`
 - `await nack(message, *, requeue=True) -> None`
 - `await retry(message, *, delay=None, reason=None) -> None`
-- `await delay(payload, *, delay_seconds=None, run_at=None, headers=None, trace_id=None) -> str`
+- `await delay(payload, *, delay_seconds=None, run_at=None, headers=None, message_id=None, trace_id=None) -> str`
 - `await schedule_due(*, limit=100, now=None) -> int`
 - `await recover_stale(*, min_idle_ms=None, limit=100) -> int`
 - `await dead_letters(*, limit=100) -> list[Message]`
@@ -345,10 +345,10 @@ Streams are rejected with `RedisCompatibilityError` when Redis is below `5.0`.
 
 ## CLI / 命令行工具
 
-RedQueue `0.13.0` provides a `redqueue` console command and a
+RedQueue `0.13.1` provides a `redqueue` console command and a
 `python -m redqueue` module entry point for developer diagnostics.
 
-RedQueue `0.13.0` 提供 `redqueue` 控制台命令和 `python -m redqueue`
+RedQueue `0.13.1` 提供 `redqueue` 控制台命令和 `python -m redqueue`
 模块入口，用于开发者调试。
 
 Commands / 命令：

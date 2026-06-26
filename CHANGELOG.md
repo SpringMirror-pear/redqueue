@@ -7,6 +7,23 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.13.1] - 2026-06-27
+
+### Fixed
+
+- Fixed a compatibility regression where legacy messages with blank
+  `headers["trace_id"]` values could fail to construct or consume after
+  upgrading to `0.13.0`.
+- Fixed sync and async `publish(..., delay=..., message_id=...)` so delayed
+  publishing preserves caller-provided message ids.
+
+### 修复
+
+- 修复升级到 `0.13.0` 后，历史消息中空白 `headers["trace_id"]` 可能导致
+  消息构造或消费失败的兼容性回归。
+- 修复同步和异步 `publish(..., delay=..., message_id=...)`，现在延迟发布会
+  保留调用方传入的消息 ID。
+
 ## [0.13.0] - 2026-06-27
 
 ### Added

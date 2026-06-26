@@ -329,7 +329,7 @@ REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "
 
 Python `3.14.5` 最新本地运行结果：
 
-- 未设置 `REDQUEUE_REDIS_URL` 时的完整测试套件：`77 passed, 8 skipped`。
+- 未设置 `REDQUEUE_REDIS_URL` 时的完整测试套件：`102 passed, 8 skipped`。
 - 真实 Redis 可用性套件：使用 `redis://127.0.0.1:6379/0` 时 `3 passed`。
 - 真实 Redis 服务端：Redis for Windows `5.0.14.1`。
 - 可用性套件覆盖：List processing 恢复、List 死信重放、Streams Redis
