@@ -25,6 +25,7 @@ class MonitoringEventType(str, Enum):
     MESSAGE_NACKED = "message.nacked"
     MESSAGE_RETRIED = "message.retried"
     MESSAGE_DEAD_LETTERED = "message.dead_lettered"
+    MESSAGE_DEDUPLICATED = "message.deduplicated"
     DELAY_SCHEDULED = "delay.scheduled"
     DELAY_RELEASED = "delay.released"
     BACKEND_ERROR = "backend.error"

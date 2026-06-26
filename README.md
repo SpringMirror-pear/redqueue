@@ -19,6 +19,7 @@ https://github.com/SpringMirror-pear/redqueue.git
 - Redis connection pool managers for shared sync and async resources.
 - `redqueue` CLI for local debugging and operational checks.
 - First-class `trace_id` propagation for lifecycle tracing.
+- Opt-in message deduplication with Redis `SET NX` and TTL windows.
 - Unified exception hierarchy with structured context.
 - Monitoring events for publish, consume, ack, nack, retry, dead letter, delay,
   and backend errors.
@@ -42,6 +43,7 @@ Redis:
 | Streams | `>=5.0` | Uses `XADD`, `XGROUP CREATE`, `XREADGROUP` |
 | Streams auto claim | `>=6.2` | Uses `XAUTOCLAIM`; Redis 5.x uses `XPENDING`/`XCLAIM` fallback |
 | Delayed tasks | `>=1.2` | Uses `ZADD` and timestamp scores |
+| Message deduplication | `>=2.6.12` | Uses `SET` with `NX` and `EX`/`PX` |
 
 ## Installation
 
@@ -175,6 +177,23 @@ from redqueue import QueueClient
 client = QueueClient.from_url("redis://127.0.0.1:6379/0", queue="emails")
 client.delay({"to": "later@example.com"}, delay_seconds=60, trace_id="trace-123")
 released = client.schedule_due(limit=100)
+```
+
+Message deduplication:
+
+```python
+from redqueue import DeduplicationConfig, QueueClient
+
+client = QueueClient.from_url(
+    "redis://127.0.0.1:6379/0",
+    queue="emails",
+    deduplication=DeduplicationConfig(enabled=True, ttl_seconds=3600),
+)
+
+first_id = client.publish({"order": 1}, dedup_key="order-1")
+second_id = client.publish({"order": 1}, dedup_key="order-1")
+
+assert second_id == first_id
 ```
 
 Trace IDs:
@@ -334,17 +353,21 @@ REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "
 
 Latest local run on Python `3.14.5`:
 
-- Full test suite without `REDQUEUE_REDIS_URL`: `102 passed, 8 skipped`.
-- Real Redis availability suite: `3 passed` with
+- Full test suite without `REDQUEUE_REDIS_URL`: `114 passed, 10 skipped`.
+- Real Redis integration suite: `10 passed` with
+  `redis://127.0.0.1:6379/0`.
+- Real Redis availability suite: `5 passed` with
   `redis://127.0.0.1:6379/0`.
 - Real Redis server: Redis for Windows `5.0.14.1`.
 - Availability suite: covers List processing recovery, List dead-letter
   requeue, Streams Redis `<5.0` compatibility rejection, Streams Redis 5.x
   pending recovery fallback, Streams dead-letter requeue, delayed task publish
-  failure rollback, missing delayed payload errors, async List recovery, async
-  Streams dead-letter requeue, and async delayed task rollback.
+  failure rollback, missing delayed payload errors, publish-time deduplication,
+  delayed task deduplication, async List recovery, async Streams dead-letter
+  requeue, and async delayed task rollback.
 - Real Redis availability suite additionally validates List recovery, Streams
-  dead-letter requeue, and delayed task rollback against a running Redis server.
+  dead-letter requeue, delayed task rollback, List deduplication, and delayed
+  task deduplication against a running Redis server.
 
 ## Performance Results
 

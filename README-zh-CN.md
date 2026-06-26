@@ -18,6 +18,7 @@ https://github.com/SpringMirror-pear/redqueue.git
 - 支持同步和异步 Redis 连接池管理器，方便多个客户端共享连接池。
 - 提供 `redqueue` CLI，用于本地调试和运行时检查。
 - 一等 `trace_id` 链路追踪能力，贯穿消息生命周期。
+- 可选消息去重能力，基于 Redis `SET NX` 和 TTL 窗口。
 - 带结构化上下文的统一异常体系。
 - 针对发布、消费、确认、拒绝、重试、死信、延迟和后端错误的监控事件。
 - 通过 `INFO server` 探测 Redis 能力。
@@ -40,6 +41,7 @@ Redis：
 | Streams | `>=5.0` | 使用 `XADD`、`XGROUP CREATE`、`XREADGROUP` |
 | Streams 自动认领 | `>=6.2` | 使用 `XAUTOCLAIM`；Redis 5.x 回退 `XPENDING`/`XCLAIM` |
 | 延迟任务 | `>=1.2` | 使用 `ZADD` 和时间戳 score |
+| 消息去重 | `>=2.6.12` | 使用带 `NX` 和 `EX`/`PX` 的 `SET` |
 
 ## 安装
 
@@ -173,6 +175,23 @@ from redqueue import QueueClient
 client = QueueClient.from_url("redis://127.0.0.1:6379/0", queue="emails")
 client.delay({"to": "later@example.com"}, delay_seconds=60, trace_id="trace-123")
 released = client.schedule_due(limit=100)
+```
+
+消息去重：
+
+```python
+from redqueue import DeduplicationConfig, QueueClient
+
+client = QueueClient.from_url(
+    "redis://127.0.0.1:6379/0",
+    queue="emails",
+    deduplication=DeduplicationConfig(enabled=True, ttl_seconds=3600),
+)
+
+first_id = client.publish({"order": 1}, dedup_key="order-1")
+second_id = client.publish({"order": 1}, dedup_key="order-1")
+
+assert second_id == first_id
 ```
 
 链路追踪：
@@ -329,15 +348,16 @@ REDQUEUE_REDIS_URL=redis://127.0.0.1:6379/0 PYTHONPATH=src python -m pytest -m "
 
 Python `3.14.5` 最新本地运行结果：
 
-- 未设置 `REDQUEUE_REDIS_URL` 时的完整测试套件：`102 passed, 8 skipped`。
-- 真实 Redis 可用性套件：使用 `redis://127.0.0.1:6379/0` 时 `3 passed`。
+- 未设置 `REDQUEUE_REDIS_URL` 时的完整测试套件：`114 passed, 10 skipped`。
+- 真实 Redis 集成套件：使用 `redis://127.0.0.1:6379/0` 时 `10 passed`。
+- 真实 Redis 可用性套件：使用 `redis://127.0.0.1:6379/0` 时 `5 passed`。
 - 真实 Redis 服务端：Redis for Windows `5.0.14.1`。
 - 可用性套件覆盖：List processing 恢复、List 死信重放、Streams Redis
   `<5.0` 兼容性拒绝、Streams Redis 5.x pending 恢复回退、Streams 死信
-  重放、延迟任务发布失败回滚、延迟 payload 缺失错误、异步 List 恢复、异步
-  Streams 死信重放和异步延迟任务回滚。
+  重放、延迟任务发布失败回滚、延迟 payload 缺失错误、发布时去重、延迟任务
+  去重、异步 List 恢复、异步 Streams 死信重放和异步延迟任务回滚。
 - 真实 Redis 可用性套件额外验证了运行中 Redis 服务上的 List 恢复、Streams
-  死信重放和延迟任务回滚。
+  死信重放、延迟任务回滚、List 去重和延迟任务去重。
 
 ## 性能测试结果
 

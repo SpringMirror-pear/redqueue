@@ -12,7 +12,12 @@ from uuid import uuid4
 import pytest
 from redis import Redis
 
-from redqueue import QueueClient, RetryConfig, RetryExceededError
+from redqueue import (
+    DeduplicationConfig,
+    QueueClient,
+    RetryConfig,
+    RetryExceededError,
+)
 
 REDIS_URL = os.getenv("REDQUEUE_REDIS_URL")
 
@@ -114,6 +119,64 @@ class RealRedisAvailabilityTests(unittest.TestCase):
             payload_key = client.config.key(f"payload:{message_id}")
             self.assertEqual(redis.zscore(delayed_key, message_id), 100)
             self.assertIsNotNone(redis.get(payload_key))
+        finally:
+            client.close()
+            _cleanup(redis, queue)
+            redis.close()
+
+    def test_list_deduplication_against_real_redis(self) -> None:
+        queue = _queue_name("real-availability-dedup-list")
+        redis = _redis()
+        _cleanup(redis, queue)
+        client = QueueClient.from_url(
+            REDIS_URL,
+            queue=queue,
+            backend="list",
+            deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+        )
+        try:
+            first_id = client.publish({"order": 1}, dedup_key="order-1")
+            second_id = client.publish({"order": 1}, dedup_key="order-1")
+            message = client.consume(timeout=1)
+
+            self.assertEqual(second_id, first_id)
+            self.assertEqual(message.id, first_id)
+            self.assertIsNone(client.consume(timeout=1))
+            client.ack(message)
+        finally:
+            client.close()
+            _cleanup(redis, queue)
+            redis.close()
+
+    def test_delay_deduplication_against_real_redis(self) -> None:
+        queue = _queue_name("real-availability-dedup-delay")
+        redis = _redis()
+        _cleanup(redis, queue)
+        client = QueueClient.from_url(
+            REDIS_URL,
+            queue=queue,
+            backend="list",
+            deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+        )
+        try:
+            first_id = client.delay(
+                {"task": "later"},
+                run_at=100,
+                dedup_key="task-1",
+            )
+            second_id = client.delay(
+                {"task": "later"},
+                run_at=100,
+                dedup_key="task-1",
+            )
+            released = client.schedule_due(now=150)
+            message = client.consume(timeout=1)
+
+            self.assertEqual(second_id, first_id)
+            self.assertEqual(released, 1)
+            self.assertEqual(message.id, first_id)
+            self.assertIsNone(client.consume(timeout=1))
+            client.ack(message)
         finally:
             client.close()
             _cleanup(redis, queue)

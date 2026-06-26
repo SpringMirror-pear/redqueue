@@ -13,7 +13,8 @@ from redqueue.backends import DelayBackend, ListBackend, StreamBackend
 from redqueue.compat import RedisCapabilities, RedisInfoClient, detect_capabilities
 from redqueue.config import BackendType, QueueConfig
 from redqueue.connection import RedisConnectionManager
-from redqueue.message import Message
+from redqueue.deduplication import DeduplicationBackend
+from redqueue.message import Message, new_message_id
 from redqueue.monitoring import MonitoringEvent, MonitoringEventType
 
 
@@ -69,6 +70,7 @@ class QueueClient:
         try:
             self.backend = self._create_backend()
             self.delay_backend = self._create_delay_backend()
+            self.deduplication_backend = self._create_deduplication_backend()
         except Exception:
             self.close()
             raise
@@ -163,6 +165,7 @@ class QueueClient:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
         trace_id: str | None = None,
+        dedup_key: str | None = None,
     ) -> str:
         """Publish a message immediately or schedule it for later.
 
@@ -175,24 +178,38 @@ class QueueClient:
                 generates one.
             trace_id: Optional correlation id propagated with message lifecycle
                 events.
+            dedup_key: Optional deduplication key used when deduplication is
+                enabled.
 
         Returns:
             The RedQueue message id.
         """
 
+        reserved_id = message_id or new_message_id()
         if delay is not None:
-            return self.delay(
-                payload,
-                delay_seconds=delay,
-                headers=headers,
-                message_id=message_id,
+            return self._publish_with_deduplication(
+                dedup_key,
+                reserved_id,
                 trace_id=trace_id,
+                publish=lambda msg_id: self.delay(
+                    payload,
+                    delay_seconds=delay,
+                    headers=headers,
+                    message_id=msg_id,
+                    trace_id=trace_id,
+                    dedup_key=None,
+                ),
             )
-        return self.backend.publish(
-            payload,
-            headers=headers,
-            message_id=message_id,
+        return self._publish_with_deduplication(
+            dedup_key,
+            reserved_id,
             trace_id=trace_id,
+            publish=lambda msg_id: self.backend.publish(
+                payload,
+                headers=headers,
+                message_id=msg_id,
+                trace_id=trace_id,
+            ),
         )
 
     def consume(
@@ -269,6 +286,7 @@ class QueueClient:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
         trace_id: str | None = None,
+        dedup_key: str | None = None,
     ) -> str:
         """Schedule a payload for future delivery.
 
@@ -281,6 +299,8 @@ class QueueClient:
                 generates one.
             trace_id: Optional correlation id propagated when the delayed
                 message is released.
+            dedup_key: Optional deduplication key used when deduplication is
+                enabled.
 
         Returns:
             The scheduled message id.
@@ -290,13 +310,19 @@ class QueueClient:
                 if either value is negative.
         """
 
-        message_id = self.delay_backend.delay(
-            payload,
-            delay_seconds=delay_seconds,
-            run_at=run_at,
-            headers=headers,
-            message_id=message_id,
+        reserved_id = message_id or new_message_id()
+        message_id = self._publish_with_deduplication(
+            dedup_key,
+            reserved_id,
             trace_id=trace_id,
+            publish=lambda msg_id: self.delay_backend.delay(
+                payload,
+                delay_seconds=delay_seconds,
+                run_at=run_at,
+                headers=headers,
+                message_id=msg_id,
+                trace_id=trace_id,
+            ),
         )
         return message_id
 
@@ -416,3 +442,35 @@ class QueueClient:
         )
         capabilities.require_delay_sorted_set()
         return DelayBackend(self.redis, self.config, self.backend)
+
+    def _create_deduplication_backend(self) -> DeduplicationBackend:
+        """Create the Redis string deduplication helper."""
+
+        if self.redis is None:
+            raise TypeError("redis client is required for deduplication")
+        return DeduplicationBackend(self.redis, self.config)
+
+    def _publish_with_deduplication(
+        self,
+        dedup_key: str | None,
+        message_id: str,
+        *,
+        trace_id: str | None,
+        publish: Any,
+    ) -> str:
+        """Run a publish operation through optional deduplication."""
+
+        if not self.config.deduplication.enabled or dedup_key is None:
+            return publish(message_id)
+        result = self.deduplication_backend.reserve_or_get(
+            dedup_key,
+            message_id,
+            trace_id=trace_id,
+        )
+        if result.duplicate:
+            return result.message_id
+        try:
+            return publish(result.message_id)
+        except Exception:
+            self.deduplication_backend.rollback(result.dedup_key)
+            raise

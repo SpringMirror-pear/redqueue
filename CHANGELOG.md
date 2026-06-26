@@ -7,6 +7,24 @@ All notable public release changes are documented here.
 Development versions are tracked separately from formal release versions.
 开发版本与正式版本分开管理。
 
+## [0.14.0] - 2026-06-27
+
+### Added
+
+- Added opt-in Redis-backed message deduplication with
+  `DeduplicationConfig`.
+- Added `dedup_key` support to sync and async `publish()` and `delay()`.
+- Added duplicate-hit behavior that returns the first message id without
+  enqueueing or scheduling another message.
+- Added `message.deduplicated` monitoring events.
+
+### 新增
+
+- 新增基于 Redis 的可选消息去重能力，通过 `DeduplicationConfig` 启用。
+- 同步和异步 `publish()`、`delay()` 新增 `dedup_key` 参数。
+- 重复命中时返回第一次消息 ID，不再重复入队或重复调度。
+- 新增 `message.deduplicated` 监控事件。
+
 ## [0.13.1] - 2026-06-27
 
 ### Fixed

@@ -7,7 +7,7 @@
 class FakeListRedis:
     def __init__(self) -> None:
         self.lists: dict[str, list[bytes]] = {}
-        self.values: dict[str, bytes] = {}
+        self.values: dict[str, bytes | str] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
         self.commands: list[str] = []
         self.timeouts: list[float | int] = []
@@ -68,12 +68,21 @@ class FakeListRedis:
     def close(self) -> None:
         self.commands.append("close")
 
-    def set(self, name: str, value: bytes) -> bool:
+    def set(
+        self,
+        name: str,
+        value: bytes | str,
+        nx: bool = False,
+        ex: int | None = None,
+        px: int | None = None,
+    ) -> bool | None:
         self.commands.append("set")
+        if nx and name in self.values:
+            return None
         self.values[name] = value
         return True
 
-    def get(self, name: str) -> bytes | None:
+    def get(self, name: str) -> bytes | str | None:
         self.commands.append("get")
         return self.values.get(name)
 
@@ -151,10 +160,17 @@ class FakeAsyncListRedis(FakeListRedis):
     async def aclose(self) -> None:
         self.commands.append("aclose")
 
-    async def set(self, name: str, value: bytes) -> bool:
-        return super().set(name, value)
+    async def set(
+        self,
+        name: str,
+        value: bytes | str,
+        nx: bool = False,
+        ex: int | None = None,
+        px: int | None = None,
+    ) -> bool | None:
+        return super().set(name, value, nx=nx, ex=ex, px=px)
 
-    async def get(self, name: str) -> bytes | None:
+    async def get(self, name: str) -> bytes | str | None:
         return super().get(name)
 
     async def delete(self, *names: str) -> int:
@@ -183,8 +199,34 @@ class FakeStreamRedis:
         self.groups: set[tuple[str, str]] = set()
         self.pending: dict[tuple[str, str, str], tuple[str, dict[str, bytes]]] = {}
         self.delivered: set[tuple[str, str, str]] = set()
+        self.values: dict[str, bytes | str] = {}
         self.commands: list[str] = []
         self._counter = 0
+
+    def set(
+        self,
+        name: str,
+        value: bytes | str,
+        nx: bool = False,
+        ex: int | None = None,
+        px: int | None = None,
+    ) -> bool | None:
+        self.commands.append("set")
+        if nx and name in self.values:
+            return None
+        self.values[name] = value
+        return True
+
+    def get(self, name: str) -> bytes | str | None:
+        self.commands.append("get")
+        return self.values.get(name)
+
+    def delete(self, *names: str) -> int:
+        self.commands.append("delete")
+        removed = 0
+        for name in names:
+            removed += 1 if self.values.pop(name, None) is not None else 0
+        return removed
 
     def xgroup_create(
         self,

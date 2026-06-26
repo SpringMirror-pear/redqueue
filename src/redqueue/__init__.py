@@ -13,7 +13,7 @@ from redqueue.compat import (
     detect_capabilities_async,
     extract_redis_version,
 )
-from redqueue.config import BackendType, QueueConfig, RetryConfig
+from redqueue.config import BackendType, DeduplicationConfig, QueueConfig, RetryConfig
 from redqueue.connection import AsyncRedisConnectionManager, RedisConnectionManager
 from redqueue.exceptions import (
     AckError,
@@ -47,6 +47,7 @@ __all__ = [
     "BackendUnavailableError",
     "ErrorContext",
     "CompositeMonitoringHook",
+    "DeduplicationConfig",
     "InMemoryMonitoringHook",
     "JsonSerializer",
     "Message",

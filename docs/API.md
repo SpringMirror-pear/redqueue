@@ -1,8 +1,8 @@
 # RedQueue API / RedQueue API 文档
 
-This document describes the public API available in RedQueue `0.13.1`.
+This document describes the public API available in RedQueue `0.14.0`.
 
-本文档描述 RedQueue `0.13.1` 的公开 API。
+本文档描述 RedQueue `0.14.0` 的公开 API。
 
 ## Clients / 客户端
 
@@ -27,12 +27,12 @@ Methods / 方法：
 - `from_url(url, *, queue, backend="list", connection_manager=None, **options) -> QueueClient`
   - Advanced options include `pool_options`, injected `redis`, injected
     `capabilities`, and `owns_redis`.
-- `publish(payload, *, delay=None, headers=None, message_id=None, trace_id=None) -> str`
+- `publish(payload, *, delay=None, headers=None, message_id=None, trace_id=None, dedup_key=None) -> str`
 - `consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `ack(message) -> None`
 - `nack(message, *, requeue=True) -> None`
 - `retry(message, *, delay=None, reason=None) -> None`
-- `delay(payload, *, delay_seconds=None, run_at=None, headers=None, message_id=None, trace_id=None) -> str`
+- `delay(payload, *, delay_seconds=None, run_at=None, headers=None, message_id=None, trace_id=None, dedup_key=None) -> str`
 - `schedule_due(*, limit=100, now=None) -> int`
 - `recover_stale(*, min_idle_ms=None, limit=100) -> int`
 - `dead_letters(*, limit=100) -> list[Message]`
@@ -61,12 +61,12 @@ Methods / 方法：
 - `await from_url(url, *, queue, backend="list", connection_manager=None, **options) -> AsyncQueueClient`
   - Advanced options include `pool_options`, injected `redis`, injected
     `capabilities`, and `owns_redis`.
-- `await publish(payload, *, delay=None, headers=None, message_id=None, trace_id=None) -> str`
+- `await publish(payload, *, delay=None, headers=None, message_id=None, trace_id=None, dedup_key=None) -> str`
 - `await consume(*, timeout=None, batch_size=1) -> Message | list[Message] | None`
 - `await ack(message) -> None`
 - `await nack(message, *, requeue=True) -> None`
 - `await retry(message, *, delay=None, reason=None) -> None`
-- `await delay(payload, *, delay_seconds=None, run_at=None, headers=None, message_id=None, trace_id=None) -> str`
+- `await delay(payload, *, delay_seconds=None, run_at=None, headers=None, message_id=None, trace_id=None, dedup_key=None) -> str`
 - `await schedule_due(*, limit=100, now=None) -> int`
 - `await recover_stale(*, min_idle_ms=None, limit=100) -> int`
 - `await dead_letters(*, limit=100) -> list[Message]`
@@ -149,6 +149,7 @@ Important fields / 重要字段：
 - `enable_delay: bool = False`
 - `namespace: str = "rq"`
 - `retry: RetryConfig`
+- `deduplication: DeduplicationConfig`
 - `monitoring: MonitoringHook`
 - `serializer: Serializer`
 - `visibility_timeout_seconds: float = 300.0`
@@ -166,6 +167,41 @@ Retry policy for failed messages.
 - `base_delay_seconds: float = 0.0`
 - `max_delay_seconds: float | None = None`
 - `next_delay(attempts: int) -> float`
+
+### `DeduplicationConfig`
+
+Opt-in publish-time deduplication window.
+
+可选的发布时去重窗口配置。
+
+- `enabled: bool = False`
+- `ttl_seconds: float = 86400.0`
+
+When enabled, callers may pass `dedup_key` to `publish()` or `delay()`. RedQueue
+stores the first message id in Redis with `SET NX` and the configured TTL.
+Duplicate calls with the same key return the stored message id and do not
+enqueue or schedule another message. Deduplication keys are not deleted on
+`ack()`; the TTL controls the deduplication window.
+
+启用后，调用方可以在 `publish()` 或 `delay()` 中传入 `dedup_key`。RedQueue
+会用 Redis `SET NX` 和配置的 TTL 存储第一次消息 ID。相同 key 的重复调用会
+返回已存储的消息 ID，不会再次入队或调度。去重 key 不会在 `ack()` 时删除；
+TTL 控制去重窗口。
+
+```python
+from redqueue import DeduplicationConfig, QueueClient
+
+client = QueueClient.from_url(
+    "redis://127.0.0.1:6379/0",
+    queue="emails",
+    deduplication=DeduplicationConfig(enabled=True, ttl_seconds=3600),
+)
+
+first_id = client.publish({"order": 1}, dedup_key="order-1")
+second_id = client.publish({"order": 1}, dedup_key="order-1")
+
+assert second_id == first_id
+```
 
 ### `BackendType`
 
@@ -311,6 +347,7 @@ All RedQueue custom exceptions inherit from `RedQueueError`.
 - `message.nacked`
 - `message.retried`
 - `message.dead_lettered`
+- `message.deduplicated`
 - `delay.scheduled`
 - `delay.released`
 - `backend.error`
@@ -345,10 +382,10 @@ Streams are rejected with `RedisCompatibilityError` when Redis is below `5.0`.
 
 ## CLI / 命令行工具
 
-RedQueue `0.13.1` provides a `redqueue` console command and a
+RedQueue `0.14.0` provides a `redqueue` console command and a
 `python -m redqueue` module entry point for developer diagnostics.
 
-RedQueue `0.13.1` 提供 `redqueue` 控制台命令和 `python -m redqueue`
+RedQueue `0.14.0` 提供 `redqueue` 控制台命令和 `python -m redqueue`
 模块入口，用于开发者调试。
 
 Commands / 命令：

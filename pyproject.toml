@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "redqueue"
-version = "0.13.1"
-description = "Redis-backed Python message queue library with List, Streams, delayed tasks, and monitoring."
+version = "0.14.0"
+description = "Redis-backed Python message queue library with List, Streams, delayed tasks, deduplication, and monitoring."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"

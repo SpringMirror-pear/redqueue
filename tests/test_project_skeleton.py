@@ -14,6 +14,7 @@ from redqueue import (
     BackendType,
     BackendUnavailableError,
     CompositeMonitoringHook,
+    DeduplicationConfig,
     ErrorContext,
     InMemoryMonitoringHook,
     JsonSerializer,
@@ -51,7 +52,7 @@ from tests.fakes import (
 
 class ProjectSkeletonTests(unittest.TestCase):
     def test_version_is_current_dev_version(self) -> None:
-        self.assertEqual(__version__, "0.13.1")
+        self.assertEqual(__version__, "0.14.0")
 
     def test_queue_config_accepts_and_normalizes_backend(self) -> None:
         config = QueueConfig(queue=" emails ", backend="stream")
@@ -71,6 +72,7 @@ class ProjectSkeletonTests(unittest.TestCase):
             {"queue": "emails", "consumer_group": " "},
             {"queue": "emails", "consumer_name": " "},
             {"queue": "emails", "serializer": object()},
+            {"queue": "emails", "deduplication": object()},
         ]
 
         for kwargs in invalid_configs:
@@ -100,6 +102,30 @@ class ProjectSkeletonTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(QueueConfigError):
                     RetryConfig(**kwargs)
+
+    def test_deduplication_config_validates_ttl(self) -> None:
+        config = DeduplicationConfig(enabled=True, ttl_seconds=60)
+
+        self.assertTrue(config.enabled)
+        self.assertEqual(config.ttl_seconds, 60)
+
+        for value in [0, -1]:
+            with self.subTest(value=value):
+                with self.assertRaises(QueueConfigError):
+                    DeduplicationConfig(enabled=True, ttl_seconds=value)
+
+    def test_queue_config_accepts_deduplication_config(self) -> None:
+        deduplication = DeduplicationConfig(enabled=True, ttl_seconds=30)
+        config = QueueConfig(queue="emails", deduplication=deduplication)
+
+        self.assertIs(config.deduplication, deduplication)
+        self.assertEqual(config.key("dedup:order-1"), "rq:{emails}:dedup:order-1")
+
+    def test_monitoring_event_type_includes_deduplicated(self) -> None:
+        self.assertEqual(
+            MonitoringEventType.MESSAGE_DEDUPLICATED.value,
+            "message.deduplicated",
+        )
 
     def test_message_id_is_stable_and_message_validates(self) -> None:
         message_id = new_message_id()
@@ -393,6 +419,58 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertEqual(message.headers["trace_id"], "trace-sync")
         self.assertEqual(hook.events[-1].trace_id, "trace-sync")
 
+    def test_sync_list_deduplicates_publish_by_key(self) -> None:
+        redis = FakeListRedis()
+        hook = InMemoryMonitoringHook()
+        client = QueueClient(
+            QueueConfig(
+                queue="emails",
+                deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+                monitoring=hook,
+            ),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        first_id = client.publish({"order": 1}, dedup_key=" order-1 ")
+        second_id = client.publish({"order": 1}, dedup_key="order-1")
+
+        self.assertEqual(second_id, first_id)
+        self.assertEqual(len(redis.lists[client.config.key("ready")]), 1)
+        self.assertIn("set", redis.commands)
+        self.assertIn("get", redis.commands)
+        self.assertEqual(hook.events[-1].type, MonitoringEventType.MESSAGE_DEDUPLICATED)
+        self.assertEqual(hook.events[-1].message_id, first_id)
+
+    def test_sync_publish_without_dedup_key_is_unchanged(self) -> None:
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(
+                queue="emails",
+                deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+            ),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        client.publish({"order": 1})
+        client.publish({"order": 1})
+
+        self.assertEqual(len(redis.lists[client.config.key("ready")]), 2)
+
+    def test_sync_deduplication_rejects_blank_key(self) -> None:
+        client = QueueClient(
+            QueueConfig(
+                queue="emails",
+                deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+            ),
+            redis=FakeListRedis(),
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        with self.assertRaises(QueueConfigError):
+            client.publish({"order": 1}, dedup_key=" ")
+
     def test_async_client_emits_monitoring_event(self) -> None:
         async def run() -> InMemoryMonitoringHook:
             hook = InMemoryMonitoringHook()
@@ -425,6 +503,41 @@ class ProjectSkeletonTests(unittest.TestCase):
 
         self.assertEqual(message.trace_id, "trace-async")
         self.assertEqual(message.headers["trace_id"], "trace-async")
+
+    def test_async_list_deduplicates_publish_by_key(self) -> None:
+        async def run() -> tuple[str, str, int]:
+            redis = FakeAsyncListRedis()
+            client = AsyncQueueClient(
+                QueueConfig(
+                    queue="jobs",
+                    deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+                ),
+                redis=redis,
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            first_id = await client.publish({"order": 1}, dedup_key="order-1")
+            second_id = await client.publish({"order": 1}, dedup_key="order-1")
+            return first_id, second_id, len(redis.lists[client.config.key("ready")])
+
+        first_id, second_id, ready_count = asyncio.run(run())
+
+        self.assertEqual(second_id, first_id)
+        self.assertEqual(ready_count, 1)
+
+    def test_async_deduplication_rejects_blank_key(self) -> None:
+        async def run() -> None:
+            client = AsyncQueueClient(
+                QueueConfig(
+                    queue="jobs",
+                    deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+                ),
+                redis=FakeAsyncListRedis(),
+                capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+            )
+            with self.assertRaises(QueueConfigError):
+                await client.publish({"order": 1}, dedup_key=" ")
+
+        asyncio.run(run())
 
     def test_monitoring_event_to_dict_excludes_payload(self) -> None:
         event = MonitoringEvent(
@@ -1137,6 +1250,24 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertIsInstance(message, Message)
         self.assertEqual(message.trace_id, "trace-stream")
 
+    def test_stream_deduplicates_publish_by_key(self) -> None:
+        redis = FakeStreamRedis()
+        client = QueueClient(
+            QueueConfig(
+                queue="events",
+                backend="stream",
+                deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+            ),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        first_id = client.publish({"event": "created"}, dedup_key="event-1")
+        second_id = client.publish({"event": "created"}, dedup_key="event-1")
+
+        self.assertEqual(second_id, first_id)
+        self.assertEqual(len(redis.streams[client.config.key("stream")]), 1)
+
     def test_stream_backend_retry_dead_letters_and_autoclaims(self) -> None:
         redis = FakeStreamRedis()
         client = QueueClient(
@@ -1243,6 +1374,83 @@ class ProjectSkeletonTests(unittest.TestCase):
         self.assertIn(MonitoringEventType.DELAY_SCHEDULED, event_types)
         self.assertIn(MonitoringEventType.DELAY_RELEASED, event_types)
         self.assertEqual(event_types.count(MonitoringEventType.DELAY_SCHEDULED), 2)
+
+    def test_delay_deduplicates_scheduled_messages_by_key(self) -> None:
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(
+                queue="emails",
+                deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+            ),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        first_id = client.delay(
+            {"to": "later@example.com"},
+            run_at=100,
+            dedup_key="email-1",
+        )
+        second_id = client.delay(
+            {"to": "later@example.com"},
+            run_at=100,
+            dedup_key="email-1",
+        )
+        payload_keys = [
+            key
+            for key in redis.values
+            if key.startswith(client.config.key_prefix)
+            and ":payload:" in key
+        ]
+
+        self.assertEqual(second_id, first_id)
+        self.assertEqual(len(redis.sorted_sets[client.config.key("delayed")]), 1)
+        self.assertEqual(len(payload_keys), 1)
+
+    def test_publish_delay_deduplicates_scheduled_messages_by_key(self) -> None:
+        redis = FakeListRedis()
+        client = QueueClient(
+            QueueConfig(
+                queue="emails",
+                deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+            ),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        first_id = client.publish(
+            {"to": "later@example.com"},
+            delay=60,
+            dedup_key="email-2",
+        )
+        second_id = client.publish(
+            {"to": "later@example.com"},
+            delay=60,
+            dedup_key="email-2",
+        )
+
+        self.assertEqual(second_id, first_id)
+        self.assertEqual(len(redis.sorted_sets[client.config.key("delayed")]), 1)
+
+    def test_deduplication_rolls_back_key_when_publish_fails(self) -> None:
+        class BrokenPublishRedis(FakeListRedis):
+            def lpush(self, name: str, *values: bytes) -> int:
+                raise RuntimeError("publish failed")
+
+        redis = BrokenPublishRedis()
+        client = QueueClient(
+            QueueConfig(
+                queue="emails",
+                deduplication=DeduplicationConfig(enabled=True, ttl_seconds=60),
+            ),
+            redis=redis,
+            capabilities=RedisCapabilities(RedisVersion(7, 0, 0)),
+        )
+
+        with self.assertRaises(BackendUnavailableError):
+            client.publish({"to": "user@example.com"}, dedup_key="email-3")
+
+        self.assertNotIn(client.config.key("dedup:email-3"), redis.values)
 
     def test_sync_publish_delay_preserves_message_id(self) -> None:
         client = QueueClient(

@@ -112,6 +112,30 @@ class RetryConfig:
 
 
 @dataclass(frozen=True)
+class DeduplicationConfig:
+    """Publish-time deduplication behavior.
+
+    Attributes:
+        enabled: When true, clients honor explicit ``dedup_key`` values.
+        ttl_seconds: Redis TTL for deduplication keys. The TTL defines the
+            deduplication window and must be positive.
+    """
+
+    enabled: bool = False
+    ttl_seconds: float = 86400.0
+
+    def __post_init__(self) -> None:
+        """Validate deduplication settings after initialization.
+
+        Raises:
+            QueueConfigError: If ``ttl_seconds`` is not positive.
+        """
+
+        if self.ttl_seconds <= 0:
+            raise QueueConfigError("deduplication ttl_seconds must be greater than 0")
+
+
+@dataclass(frozen=True)
 class QueueConfig:
     """Queue configuration shared by sync and async clients.
 
@@ -122,6 +146,7 @@ class QueueConfig:
         enable_delay: Reserved feature flag for delay support.
         namespace: Redis key namespace prefix.
         retry: Retry policy used by backend ``retry`` operations.
+        deduplication: Publish-time deduplication policy.
         monitoring: Monitoring hook. Custom hooks are wrapped in
             ``SafeMonitoringHook``.
         serializer: Payload serializer used for message envelopes.
@@ -136,6 +161,7 @@ class QueueConfig:
     enable_delay: bool = False
     namespace: str = "rq"
     retry: RetryConfig = field(default_factory=RetryConfig)
+    deduplication: DeduplicationConfig = field(default_factory=DeduplicationConfig)
     monitoring: MonitoringHook = field(
         default_factory=lambda: SafeMonitoringHook(NoopMonitoringHook())
     )
@@ -163,6 +189,10 @@ class QueueConfig:
             raise QueueConfigError("visibility_timeout_seconds must be greater than 0")
         if not isinstance(self.retry, RetryConfig):
             raise QueueConfigError("retry must be a RetryConfig instance")
+        if not isinstance(self.deduplication, DeduplicationConfig):
+            raise QueueConfigError(
+                "deduplication must be a DeduplicationConfig instance"
+            )
         if not hasattr(self.monitoring, "emit"):
             raise QueueConfigError(
                 "monitoring must implement the MonitoringHook protocol"

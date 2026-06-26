@@ -17,7 +17,8 @@ from redqueue.compat import (
 )
 from redqueue.config import BackendType, QueueConfig
 from redqueue.connection import AsyncRedisConnectionManager
-from redqueue.message import Message
+from redqueue.deduplication import AsyncDeduplicationBackend
+from redqueue.message import Message, new_message_id
 from redqueue.monitoring import MonitoringEvent, MonitoringEventType
 
 
@@ -62,6 +63,7 @@ class AsyncQueueClient:
         self._closed = False
         self.backend: AsyncListBackend | AsyncStreamBackend | None = None
         self.delay_backend: AsyncDelayBackend | None = None
+        self.deduplication_backend: AsyncDeduplicationBackend | None = None
         self.config.monitoring.emit(
             MonitoringEvent(
                 type=MonitoringEventType.CLIENT_CREATED,
@@ -152,6 +154,7 @@ class AsyncQueueClient:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
         trace_id: str | None = None,
+        dedup_key: str | None = None,
     ) -> str:
         """Publish a message immediately or schedule it for later.
 
@@ -162,25 +165,39 @@ class AsyncQueueClient:
             message_id: Optional stable message id.
             trace_id: Optional correlation id propagated with message lifecycle
                 events.
+            dedup_key: Optional deduplication key used when deduplication is
+                enabled.
 
         Returns:
             The RedQueue message id.
         """
 
+        reserved_id = message_id or new_message_id()
         if delay is not None:
-            return await self.delay(
-                payload,
-                delay_seconds=delay,
-                headers=headers,
-                message_id=message_id,
+            return await self._publish_with_deduplication(
+                dedup_key,
+                reserved_id,
                 trace_id=trace_id,
+                publish=lambda msg_id: self.delay(
+                    payload,
+                    delay_seconds=delay,
+                    headers=headers,
+                    message_id=msg_id,
+                    trace_id=trace_id,
+                    dedup_key=None,
+                ),
             )
         backend = await self._ensure_backend()
-        return await backend.publish(
-            payload,
-            headers=headers,
-            message_id=message_id,
+        return await self._publish_with_deduplication(
+            dedup_key,
+            reserved_id,
             trace_id=trace_id,
+            publish=lambda msg_id: backend.publish(
+                payload,
+                headers=headers,
+                message_id=msg_id,
+                trace_id=trace_id,
+            ),
         )
 
     async def consume(
@@ -252,6 +269,7 @@ class AsyncQueueClient:
         headers: dict[str, Any] | None = None,
         message_id: str | None = None,
         trace_id: str | None = None,
+        dedup_key: str | None = None,
     ) -> str:
         """Schedule a payload for future async delivery.
 
@@ -264,19 +282,27 @@ class AsyncQueueClient:
                 generates one.
             trace_id: Optional correlation id propagated when the delayed
                 message is released.
+            dedup_key: Optional deduplication key used when deduplication is
+                enabled.
 
         Returns:
             The scheduled message id.
         """
 
         delay_backend = await self._ensure_delay_backend()
-        message_id = await delay_backend.delay(
-            payload,
-            delay_seconds=delay_seconds,
-            run_at=run_at,
-            headers=headers,
-            message_id=message_id,
+        reserved_id = message_id or new_message_id()
+        message_id = await self._publish_with_deduplication(
+            dedup_key,
+            reserved_id,
             trace_id=trace_id,
+            publish=lambda msg_id: delay_backend.delay(
+                payload,
+                delay_seconds=delay_seconds,
+                run_at=run_at,
+                headers=headers,
+                message_id=msg_id,
+                trace_id=trace_id,
+            ),
         )
         return message_id
 
@@ -447,3 +473,42 @@ class AsyncQueueClient:
             await self._ensure_backend(),
         )
         return self.delay_backend
+
+    async def _ensure_deduplication_backend(self) -> AsyncDeduplicationBackend:
+        """Return the initialized async deduplication helper."""
+
+        if self.deduplication_backend is not None:
+            return self.deduplication_backend
+        if self.redis is None:
+            raise TypeError("redis client is required for async deduplication")
+        self.deduplication_backend = AsyncDeduplicationBackend(
+            self.redis,
+            self.config,
+        )
+        return self.deduplication_backend
+
+    async def _publish_with_deduplication(
+        self,
+        dedup_key: str | None,
+        message_id: str,
+        *,
+        trace_id: str | None,
+        publish: Any,
+    ) -> str:
+        """Run an async publish operation through optional deduplication."""
+
+        if not self.config.deduplication.enabled or dedup_key is None:
+            return await publish(message_id)
+        deduplication = await self._ensure_deduplication_backend()
+        result = await deduplication.reserve_or_get(
+            dedup_key,
+            message_id,
+            trace_id=trace_id,
+        )
+        if result.duplicate:
+            return result.message_id
+        try:
+            return await publish(result.message_id)
+        except Exception:
+            await deduplication.rollback(result.dedup_key)
+            raise
